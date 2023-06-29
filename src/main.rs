@@ -8,6 +8,9 @@ use winit::{
 
 use bytemuck::{Pod, Zeroable};
 
+mod renderer;
+use renderer::{context};
+
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -84,34 +87,13 @@ fn generate_matrix(aspect_ratio: f32) -> glam::Mat4 {
 
 
 async fn run(event_loop: EventLoop<()>, window: Window) {
+    let context = context::ContextInfo::init(&window).await;
     let size = window.inner_size();
-    //Instance and device init
-    let instance = wgpu::Instance::default();
-    let surface = unsafe {
-        instance.create_surface(&window)
-    }.unwrap();
-
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { 
-        power_preference: wgpu::PowerPreference::default(), 
-        force_fallback_adapter: false, 
-        compatible_surface: Some(&surface),
-    })
-    .await
-    .expect("Failed to find an appropriate adapter");
-    
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: None,
-            features: wgpu::Features::empty(),
-            limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
-        },
-        None,
-    )
-    .await
-    .expect("Failed to create device");
-
+    let device = context.device;
+    let surface = context.surface;
+    let queue = context.queue;
     //Swapchain
-    let swapchain_capabilities = surface.get_capabilities(&adapter);
+    let swapchain_capabilities = surface.get_capabilities(&context.adapter);
     let swapchain_format = swapchain_capabilities.formats[0];
 
     let mut config = wgpu::SurfaceConfiguration {
@@ -250,7 +232,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     });
 
     event_loop.run(move |event, _, control_flow| {
-        let _ = (&instance, &adapter, &shader, &pipeline_layout);
+        let _ = (&shader, &pipeline_layout);
 
         *control_flow = ControlFlow::Wait;
         match event {
