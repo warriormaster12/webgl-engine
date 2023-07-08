@@ -3,6 +3,8 @@ use std::{borrow::Cow, mem};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+mod shader;
+
 #[allow(dead_code)]
 pub struct Context {
     instance: wgpu::Instance,
@@ -74,8 +76,10 @@ impl Context {
         });
         for i in 0..meshes.len() {
             rpass.set_pipeline(&meshes[i].material.pipeline);
-            rpass.set_bind_group(0, &meshes[i].material.bind_group, &[]);
-            rpass.set_bind_group(1, &meshes[i].material.bind_group, &[]);
+            shader::bind_groups::set_bind_groups(
+                &mut rpass,
+                shader::bind_groups::BindGroups {bind_group0: &meshes[i].material.bind_group},
+            );
             rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
             rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
@@ -130,77 +134,22 @@ impl Swapchain{
 
 pub struct Material {
   pub pipeline: wgpu::RenderPipeline,
-  pub bind_group: wgpu::BindGroup,
+  pub bind_group: shader::bind_groups::BindGroup0,
 }
 
 impl Material {
     pub fn new(context: &Context, buffers: [&wgpu::Buffer;2]) -> Material {
         //Shader and pipeline
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { 
-        label: None,
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../shader.wgsl"))),
-    });
 
-    //Vulkan equivalent to descriptor set layouts
-    let bind_group_layout = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: None,
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(64),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { 
-                    ty: wgpu::BufferBindingType::Uniform, 
-                    has_dynamic_offset: false, 
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
-        let pipeline_layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-    
-        let vertex_buffers = [wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 4 * 4,
-                    shader_location: 1,
-                },
-            ],
-        }];
-    
+        let module = shader::create_shader_module(&context.device);
+        
         let render_pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &vertex_buffers,
-            },
+            layout: Some(&shader::create_pipeline_layout(&context.device)),
+            vertex: shader::vertex_state(&module, &shader::vs_main_entry(wgpu::VertexStepMode::Vertex)),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
+                module: &module,
+                entry_point: shader::ENTRY_FS_MAIN,
                 targets: &[Some(context.get_swapchain().get_format().into())],
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -210,20 +159,13 @@ impl Material {
         });
 
         // Vulkan equivalent to descriptor sets
-        let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffers[0].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: buffers[1].as_entire_binding(),
-                },
-            ],
-            label: None,
-        });
+        let bind_group = shader::bind_groups::BindGroup0::from_bindings(
+            &context.device,
+            shader::bind_groups::BindGroupLayout0 {
+                camera: buffers[0].as_entire_buffer_binding(),
+                triangle_data: buffers[1].as_entire_buffer_binding(),
+            }
+        );
 
         Material { pipeline: render_pipeline, bind_group }
     }

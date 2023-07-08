@@ -11,7 +11,6 @@ use bytemuck::{Pod, Zeroable};
 mod renderer;
 use renderer::{context};
 
-
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct TriangleUniform {
@@ -31,7 +30,6 @@ fn generate_matrix(aspect_ratio: f32) -> glam::Mat4 {
 
 async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut context = context::Context::new(&window).await;
-
      // Create other resources
      let mx_total = generate_matrix(context.get_swapchain().get_resolution().0 as f32 / context.get_swapchain().get_resolution().1 as f32);
      let mx_ref: &[f32; 16] = mx_total.as_ref();
