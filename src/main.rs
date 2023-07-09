@@ -11,43 +11,13 @@ use bytemuck::{Pod, Zeroable};
 mod renderer;
 use renderer::{context};
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct TriangleUniform {
-    color: [f32; 4]
-}
-
-fn generate_matrix(aspect_ratio: f32) -> glam::Mat4 {
-    let projection = glam::Mat4::perspective_rh(consts::FRAC_PI_4, aspect_ratio, 1.0, 10.0);
-    let view = glam::Mat4::look_at_rh(
-        glam::Vec3::new(1.5f32, -5.0, 3.0),
-        glam::Vec3::ZERO,
-        glam::Vec3::Z,
-    );
-    projection * view
-}
-
 
 async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut context = context::Context::new(&window).await;
-     // Create other resources
-     let mx_total = generate_matrix(context.get_swapchain().get_resolution().0 as f32 / context.get_swapchain().get_resolution().1 as f32);
-     let mx_ref: &[f32; 16] = mx_total.as_ref();
-     let matrix_u_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-         label: Some("Uniform Buffer"),
-         contents: bytemuck::cast_slice(mx_ref),
-         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-     });
-
-    //Color uniform buffer
-    let uniform_buf = context.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Uniform Buffer Color"),
-        size: mem::size_of::<TriangleUniform>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let mesh = context::Mesh::new(&context, context::Material::new(&context, [&matrix_u_buffer, &uniform_buf]));
+    // Create other resources
+    let camera = context::Camera::new(&context, 90.0);
+    let mesh = context::Mesh::new(&context, context::Material::new(&context));
+    mesh.material.set_color(&context, [1.0, 0.0, 1.0, 1.0]);
     let mut meshes:Vec<context::Mesh> = Vec::new();
     meshes.push(mesh);
     event_loop.run(move |event, _, control_flow| {
@@ -60,18 +30,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
             } => {
                 // Reconfigure the surface with the new size
                 context.update_swapchain((size.width, size.height));
-                let mx_total = generate_matrix(context.get_swapchain().get_resolution().0 as f32 / context.get_swapchain().get_resolution().1 as f32);
-                let mx_ref: &[f32; 16] = mx_total.as_ref();
-                context.queue.write_buffer(&matrix_u_buffer, 0, bytemuck::cast_slice(mx_ref));
+                camera.update(&context);
                 // On macos the window needs to be redrawn manually after resizing
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                let triangle_data = TriangleUniform {
-                    color: [1.0, 0.5, 0.7, 1.0],
-                };
-                context.queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&triangle_data));
-                context.present(&meshes);
+                context.present(&camera, &meshes);
                 window.request_redraw(); // with this call inside RedrawRequested event, we can tell the window to basically redraw every frame
             }
             Event::WindowEvent {

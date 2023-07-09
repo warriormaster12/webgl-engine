@@ -1,4 +1,4 @@
-use std::{borrow::Cow, mem};
+use std::{borrow::Cow, mem, f32::consts};
 
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -58,7 +58,7 @@ impl Context {
         self.surface.configure(&self.device, &self.swapchain.config);
     }
 
-    fn draw(&self, encoder:&mut wgpu::CommandEncoder, frame: &wgpu::SurfaceTexture, meshes: &Vec<Mesh>) {
+    fn draw(&self, encoder:&mut wgpu::CommandEncoder, frame: &wgpu::SurfaceTexture, camera: &Camera, meshes: &Vec<Mesh>) {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -76,23 +76,21 @@ impl Context {
         });
         for i in 0..meshes.len() {
             rpass.set_pipeline(&meshes[i].material.pipeline);
-            shader::bind_groups::set_bind_groups(
-                &mut rpass,
-                shader::bind_groups::BindGroups {bind_group0: &meshes[i].material.bind_group},
-            );
+            rpass.set_bind_group(0, &camera.bind_group, &[]);
+            rpass.set_bind_group(1, &meshes[i].material.bind_group, &[]);
             rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
             rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
         }
     }
 
-    pub fn present(&self, meshes: &Vec<Mesh>) {
+    pub fn present(&self, camera: &Camera, meshes: &Vec<Mesh>) {
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let frame = self.surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        self.draw(&mut encoder, &frame,meshes);
+        self.draw(&mut encoder, &frame,camera,meshes);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
@@ -127,18 +125,67 @@ impl Swapchain{
         (self.config.width, self.config.height)
     }
 
+    pub fn get_aspect_ratio(&self) -> f32 {
+        self.config.width as f32 / self.config.height as f32
+    }
+
     pub fn get_format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
 }
 
+pub struct Camera {
+    pub fov: f32,
+    pub bind_group: wgpu::BindGroup,
+    pub is_active: bool,
+    camera_buffer: wgpu::Buffer,
+}
+impl Camera {
+    fn generate_matrix(aspect_ratio: f32, fov:f32, z_near:f32, z_far:f32) -> glam::Mat4 {
+        let projection = glam::Mat4::perspective_rh(fov * consts::PI / 180., aspect_ratio, z_near, z_far);
+        let view = glam::Mat4::look_at_rh(
+            glam::Vec3::new(1.5f32, -5.0, 3.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Z,
+        );
+        projection * view
+    }
+    pub fn new(context: &Context, fov: f32) -> Camera {
+        let layout = shader::bind_groups::BindGroup0::get_bind_group_layout(&context.device);
+        let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
+        let mx_ref: &[f32; 16] = mx_total.as_ref();
+        let camera_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("camera buffer"),
+            contents: bytemuck::cast_slice(mx_ref),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor { 
+            label: None,
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry{
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }
+            ] 
+        });
+        Camera { fov: fov, bind_group: bind_group, is_active: true, camera_buffer: camera_buffer }
+    }
+
+    pub fn update(&self, context: &Context) {
+        let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), self.fov, 1.0, 100.0);
+        let mx_ref: &[f32; 16] = mx_total.as_ref();
+        context.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(mx_ref));
+    }
+}
 pub struct Material {
   pub pipeline: wgpu::RenderPipeline,
-  pub bind_group: shader::bind_groups::BindGroup0,
+  pub bind_group: wgpu::BindGroup,
+  material_buffer: wgpu::Buffer,
 }
 
 impl Material {
-    pub fn new(context: &Context, buffers: [&wgpu::Buffer;2]) -> Material {
+    pub fn new(context: &Context) -> Material {
         //Shader and pipeline
 
         let module = shader::create_shader_module(&context.device);
@@ -158,17 +205,32 @@ impl Material {
             multiview: None,
         });
 
+        let material_data = shader::Material {color: [1.0,1.0,1.0,1.0]};
+        let material_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Material Buffer"),
+            contents: bytemuck::bytes_of(&material_data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        
         // Vulkan equivalent to descriptor sets
-        let bind_group = shader::bind_groups::BindGroup0::from_bindings(
-            &context.device,
-            shader::bind_groups::BindGroupLayout0 {
-                camera: buffers[0].as_entire_buffer_binding(),
-                triangle_data: buffers[1].as_entire_buffer_binding(),
-            }
-        );
-
-        Material { pipeline: render_pipeline, bind_group }
+        let layout = shader::bind_groups::BindGroup1::get_bind_group_layout(&context.device);
+        let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor { 
+            label: None,
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry{
+                    binding: 0,
+                    resource: material_buffer.as_entire_binding(),
+                }
+            ] 
+        });
+        Material { pipeline: render_pipeline, bind_group, material_buffer }
     }
+    pub fn set_color(&self, context: &Context, color: [f32; 4]) {
+        let material_data = shader::Material {color: color};
+        context.queue.write_buffer(&self.material_buffer, 0, bytemuck::bytes_of(&material_data));
+    }
+
 }
 
 #[repr(C)]

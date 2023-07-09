@@ -21,14 +21,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return result;
 }
 
-struct TriangleUniform {
+struct Material {
     color: vec4<f32>
 }
-@group(0) 
-@binding(1)
-var<uniform> triangle_data: TriangleUniform;
+@group(1) 
+@binding(0)
+var<uniform> material_data: Material;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(triangle_data.color);
+    return vec4<f32>(material_data.color);
 }
