@@ -1,9 +1,10 @@
-use std::{borrow::Cow, mem, f32::consts};
+use std::{mem, f32::consts, borrow::Cow, collections::HashMap, ops::Index};
+use naga;
 
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-mod shader;
+
 
 #[allow(dead_code)]
 pub struct Context {
@@ -14,10 +15,10 @@ pub struct Context {
     //swapchain
     swapchain: Swapchain,
     pub surface: wgpu::Surface,
+    render_pipelines: HashMap<String, RenderPipeline>,
 }
 
 use bytemuck::{Pod, Zeroable};
-
 impl Context {
     pub async fn new(window: &Window) -> Context {
         //Instance and device init
@@ -45,7 +46,7 @@ impl Context {
         .await
         .expect("Failed to create device");
         let swapchain = Swapchain::new(&adapter, &device, &surface, (window.inner_size().width, window.inner_size().height));
-        Context {instance, adapter, device, queue,surface,swapchain}
+        Context {instance, adapter, device, queue,surface,swapchain, render_pipelines: HashMap::new()}
     } 
 
     pub fn get_swapchain(&self)-> &Swapchain {
@@ -58,40 +59,65 @@ impl Context {
         self.surface.configure(&self.device, &self.swapchain.config);
     }
 
-    fn draw(&self, encoder:&mut wgpu::CommandEncoder, frame: &wgpu::SurfaceTexture, camera: &Camera, meshes: &Vec<Mesh>) {
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-                    store: true,
-                },
-            })],
-            depth_stencil_attachment: None,
-        });
-        for i in 0..meshes.len() {
-            rpass.set_pipeline(&meshes[i].material.pipeline);
-            rpass.set_bind_group(0, &camera.bind_group, &[]);
-            rpass.set_bind_group(1, &meshes[i].material.bind_group, &[]);
-            rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
-            rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
+    pub fn add_render_pipeline(&mut self, id: String) {
+        if self.render_pipelines.get(&id).is_none() {
+            let pipeline = RenderPipeline::new(self);
+            self.render_pipelines.insert(id, pipeline);
         }
     }
 
-    pub fn present(&self, camera: &Camera, meshes: &Vec<Mesh>) {
+    pub fn get_pipeline(&mut self, id: String) -> Option<&mut RenderPipeline> {
+        if self.render_pipelines.get(&id).is_some() {
+            return self.render_pipelines.get_mut(&id);
+        }
+        return None;
+    }
+
+    pub fn bind_resource_to_pipeline(&mut self, id: String, group: usize, resources: Vec<wgpu::BindingResource<'_>>) {
+        if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
+            pipeline.bind_resource(&self.device, group, resources)
+        }
+    }
+
+    fn draw(&self, view: wgpu::TextureView, meshes: &Vec<Mesh>) {
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {r: 0.3, g: 0.5, b: 1.0, a: 1.0}),
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+            for pipeline in self.render_pipelines.values() {
+                rpass.set_pipeline(&pipeline.pipeline);
+                for i in 0..meshes.len() {
+                    for (index, group) in &pipeline.bind_groups {
+                        rpass.set_bind_group(index.clone() as u32, &group, &[]);
+                    }
+                    if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
+                        rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                        rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
+                        rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
+                    }
+                }
+
+            }
+        }
+        self.queue.submit(Some(encoder.finish()));
+    }
+
+    pub fn present(&self, meshes: &Vec<Mesh>) {
         let frame = self.surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        self.draw(&mut encoder, &frame,camera,meshes);
-        self.queue.submit(Some(encoder.finish()));
+        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()),meshes);
         frame.present();
     }
     
@@ -136,7 +162,6 @@ impl Swapchain{
 
 pub struct Camera {
     pub fov: f32,
-    pub bind_group: wgpu::BindGroup,
     pub is_active: bool,
     camera_buffer: wgpu::Buffer,
 }
@@ -150,8 +175,7 @@ impl Camera {
         );
         projection * view
     }
-    pub fn new(context: &Context, fov: f32) -> Camera {
-        let layout = shader::bind_groups::BindGroup0::get_bind_group_layout(&context.device);
+    pub fn new(context: &mut Context, fov: f32) -> Camera {
         let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
         let camera_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -159,17 +183,8 @@ impl Camera {
             contents: bytemuck::cast_slice(mx_ref),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor { 
-            label: None,
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry{
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ] 
-        });
-        Camera { fov: fov, bind_group: bind_group, is_active: true, camera_buffer: camera_buffer }
+        context.bind_resource_to_pipeline("shader".to_string(), 0, [camera_buffer.as_entire_binding()].to_vec());
+        Camera { fov: fov, is_active: true, camera_buffer: camera_buffer }
     }
 
     pub fn update(&self, context: &Context) {
@@ -178,56 +193,148 @@ impl Camera {
         context.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(mx_ref));
     }
 }
-pub struct Material {
-  pub pipeline: wgpu::RenderPipeline,
-  pub bind_group: wgpu::BindGroup,
-  material_buffer: wgpu::Buffer,
+
+pub struct RenderPipeline {
+    pipeline: wgpu::RenderPipeline,
+    group_layouts: Vec<wgpu::BindGroupLayout>,
+    bind_groups: HashMap<usize,wgpu::BindGroup>
 }
-
-impl Material {
-    pub fn new(context: &Context) -> Material {
+impl RenderPipeline {
+    pub fn new(context: &Context) -> RenderPipeline {
         //Shader and pipeline
-
-        let module = shader::create_shader_module(&context.device);
+        let module = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { 
+            label: None, 
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("context/shader.wgsl"))) 
+        });
+        let naga_module = naga::front::wgsl::parse_str(include_str!("context/shader.wgsl")).unwrap();
+        let mut group_layouts: Vec<wgpu::BindGroupLayout> = Vec::new();
+        for global_handle in naga_module.global_variables.iter() {
+            let handle = &naga_module.global_variables[global_handle.0];
+            let mut entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
+            if let Some(bindings) = &handle.binding {
+                let ty = match naga_module.types[handle.ty].inner {
+                    naga::TypeInner::Struct { .. } => {
+                        wgpu::BindingType::Buffer { 
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None 
+                        }
+                    },
+                    //naga::TypeInner::Image { .. } => quote!(&'a wgpu::TextureView),
+                    //naga::TypeInner::Sampler { .. } => quote!(&'a wgpu::Sampler),
+                    //naga::TypeInner::Array { .. } => quote!(wgpu::BufferBinding<'a>),
+                    _ => panic!("Unsupported type for binding fields."),
+                };
+                let entry = wgpu::BindGroupLayoutEntry{
+                    binding: bindings.binding,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: ty,
+                    count: None
+                };
+                entries.push(entry);
+            }
+            if entries.len() > 0 {
+                let layout = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { 
+                    label: None,
+                    entries: &entries,
+                });
+                group_layouts.push(layout);
+            }
+        }
         
+        let vertex_buffers = [wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 4 * 4,
+                    shader_location: 1,
+                },
+            ],
+        }];
         let render_pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            layout: Some(&shader::create_pipeline_layout(&context.device)),
-            vertex: shader::vertex_state(&module, &shader::vs_main_entry(wgpu::VertexStepMode::Vertex)),
+            layout: Some(
+                &context.device.create_pipeline_layout(
+                    &wgpu::PipelineLayoutDescriptor { 
+                        label: None,
+                        bind_group_layouts: &[&group_layouts[0], &group_layouts[1]],
+                        push_constant_ranges: &[], 
+                    }
+                )
+            ),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: &naga_module.entry_points[0].name,
+                buffers: &vertex_buffers,
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
-                entry_point: shader::ENTRY_FS_MAIN,
+                entry_point: &naga_module.entry_points[1].name,
                 targets: &[Some(context.get_swapchain().get_format().into())],
             }),
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
+        RenderPipeline { pipeline: render_pipeline, group_layouts: group_layouts, bind_groups: HashMap::new() }
+    }
+    pub fn bind_resource(&mut self, device: &wgpu::Device, group: usize, resources: Vec<wgpu::BindingResource>) {
+        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
+        for i in 0..resources.len() {
+            let entry = wgpu::BindGroupEntry{
+                binding: i as u32,
+                resource: resources[i].clone(), 
+            };
+            entries.push(entry);
+        }
+        self.bind_groups.entry(group).or_insert(device.create_bind_group(
+            &wgpu::BindGroupDescriptor{
+                label: None,
+                layout: &self.group_layouts[group],
+                entries: &entries,
+            }
+        ));
+    }
+}
+pub struct Material {
+  material_buffer: wgpu::Buffer,
+}
 
-        let material_data = shader::Material {color: [1.0,1.0,1.0,1.0]};
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GPUMaterialData {
+    pub color: [f32; 4]
+}
+
+struct GPUMesh {
+    pub model_mx: [f32; 16]
+}
+
+impl Material {
+    pub fn new(context: &mut Context) -> Material {
+
+        let material_data = GPUMaterialData {color: [1.0,1.0,1.0,1.0]};
         let material_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Material Buffer"),
             contents: bytemuck::bytes_of(&material_data),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        
-        // Vulkan equivalent to descriptor sets
-        let layout = shader::bind_groups::BindGroup1::get_bind_group_layout(&context.device);
-        let bind_group = context.device.create_bind_group(&wgpu::BindGroupDescriptor { 
-            label: None,
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry{
-                    binding: 0,
-                    resource: material_buffer.as_entire_binding(),
-                }
-            ] 
-        });
-        Material { pipeline: render_pipeline, bind_group, material_buffer }
+        context.bind_resource_to_pipeline("shader".to_string(), 1, [material_buffer.as_entire_binding()].to_vec());
+        Material { material_buffer }
     }
     pub fn set_color(&self, context: &Context, color: [f32; 4]) {
-        let material_data = shader::Material {color: color};
+        let material_data = GPUMaterialData {color};
         context.queue.write_buffer(&self.material_buffer, 0, bytemuck::bytes_of(&material_data));
     }
 
@@ -299,16 +406,16 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(context: &Context, material: Material) -> Mesh{
+    pub fn new(device: &wgpu::Device, material: Material) -> Mesh{
         let (verticies, indicies) = create_vertices();
 
-        let vertex_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&verticies),
             usage: wgpu::BufferUsages::VERTEX,
         });
     
-        let index_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
             contents: bytemuck::cast_slice(&indicies),
             usage: wgpu::BufferUsages::INDEX,

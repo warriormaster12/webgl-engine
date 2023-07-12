@@ -1,25 +1,24 @@
-use std::{mem, f32::consts};
-use wgpu::util::DeviceExt;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::{Window}, dpi::PhysicalSize,
+    window::Window, dpi::PhysicalSize,
 };
 
-use bytemuck::{Pod, Zeroable};
-
 mod renderer;
-use renderer::{context};
+use renderer::context;
 
 
 async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut context = context::Context::new(&window).await;
     // Create other resources
-    let camera = context::Camera::new(&context, 90.0);
-    let mesh = context::Mesh::new(&context, context::Material::new(&context));
-    mesh.material.set_color(&context, [1.0, 0.0, 1.0, 1.0]);
+    context.add_render_pipeline("shader".to_string());
+    let material = context::Material::new(&mut context);
+    let camera = context::Camera::new(&mut context, 90.0);
+    let mesh = context::Mesh::new(&context.device, material);
+    mesh.material.set_color(&context, [0.0, 1.0, 1.0, 1.0]);
     let mut meshes:Vec<context::Mesh> = Vec::new();
     meshes.push(mesh);
+
     event_loop.run(move |event, _, control_flow| {
 
         *control_flow = ControlFlow::Wait;
@@ -35,7 +34,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                context.present(&camera, &meshes);
+                context.present(&meshes);
                 window.request_redraw(); // with this call inside RedrawRequested event, we can tell the window to basically redraw every frame
             }
             Event::WindowEvent {

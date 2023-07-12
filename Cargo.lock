@@ -221,12 +221,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "case"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd6c0e7b807d60291f42f33f58480c0bfafe28ed08286446f45e463728cf9c1c"
-
-[[package]]
 name = "cc"
 version = "1.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "naga"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80cd00bd6180a8790f1c020ed258a46b8d73dd5bd6af104a238c9d71f806938e"
+checksum = "bbcc2e0513220fd2b598e6068608d4462db20322c0e77e47f6f488dfcfc279cb"
 dependencies = [
  "bit-set",
  "bitflags 1.3.2",
@@ -1035,16 +1029,6 @@ name = "pollster"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22686f4785f02a4fcc856d3b3bb19bf6c8160d103f7a99cc258bddd0251dc7f2"
-
-[[package]]
-name = "prettyplease"
-version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c8646e95016a7a6c4adea95bafa8a16baab64b583356217f2c85db4a39d9a86"
-dependencies = [
- "proc-macro2",
- "syn 1.0.109",
-]
 
 [[package]]
 name = "proc-macro-crate"
@@ -1576,9 +1560,9 @@ dependencies = [
  "glam",
  "log",
  "memoffset 0.9.0",
+ "naga",
  "pollster",
  "wgpu",
- "wgsl_to_wgpu",
  "winit",
 ]
 
@@ -1633,22 +1617,6 @@ dependencies = [
  "bitflags 2.3.3",
  "js-sys",
  "web-sys",
-]
-
-[[package]]
-name = "wgsl_to_wgpu"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9819ccd6eae3bd77bc01affbabfbd9d43dbb89068ebdf04578cd323248122d50"
-dependencies = [
- "case",
- "naga",
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
- "thiserror",
- "wgpu-types",
 ]
 
 [[package]]
