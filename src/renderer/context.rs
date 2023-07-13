@@ -1,10 +1,16 @@
-use std::{mem, f32::consts, borrow::Cow, collections::HashMap, ops::Index};
+use std::{mem, f32::consts, borrow::Cow, collections::HashMap};
 use naga;
 
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
+pub enum BindingGroupType {
+    Global = 0,
+    PerFrame = 1,
+    Resource = 2,
+    PerObject = 3,
+}
 
 #[allow(dead_code)]
 pub struct Context {
@@ -73,7 +79,7 @@ impl Context {
         return None;
     }
 
-    pub fn bind_resource_to_pipeline(&mut self, id: String, group: usize, resources: Vec<wgpu::BindingResource<'_>>) {
+    pub fn bind_resource_to_pipeline(&mut self, id: String, group: BindingGroupType, resources: Vec<wgpu::BindingResource<'_>>) {
         if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
             pipeline.bind_resource(&self.device, group, resources)
         }
@@ -89,7 +95,7 @@ impl Context {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {r: 0.3, g: 0.5, b: 1.0, a: 1.0}),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {r: 0.1, g: 0.1, b: 0.1, a: 1.0}),
                         store: true,
                     },
                 })],
@@ -97,11 +103,20 @@ impl Context {
             });
             for pipeline in self.render_pipelines.values() {
                 rpass.set_pipeline(&pipeline.pipeline);
-                for i in 0..meshes.len() {
-                    for (index, group) in &pipeline.bind_groups {
-                        rpass.set_bind_group(index.clone() as u32, &group, &[]);
+                if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
+                    if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global) {
+                        rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[]);
                     }
-                    if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
+                    if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
+                        rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[]);
+                    }
+                    for i in 0..meshes.len() {
+                        if let Some(per_resource) = pipeline.bind_groups.get(&BindingGroupType::Resource) {
+                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[]);
+                        }
+                        if let Some(per_object) = pipeline.bind_groups.get(&BindingGroupType::PerObject) {
+                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_object, &[]);
+                        }
                         rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                         rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
                         rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
@@ -183,7 +198,7 @@ impl Camera {
             contents: bytemuck::cast_slice(mx_ref),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        context.bind_resource_to_pipeline("shader".to_string(), 0, [camera_buffer.as_entire_binding()].to_vec());
+        context.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Global, [camera_buffer.as_entire_binding()].to_vec());
         Camera { fov: fov, is_active: true, camera_buffer: camera_buffer }
     }
 
@@ -196,8 +211,8 @@ impl Camera {
 
 pub struct RenderPipeline {
     pipeline: wgpu::RenderPipeline,
-    group_layouts: Vec<wgpu::BindGroupLayout>,
-    bind_groups: HashMap<usize,wgpu::BindGroup>
+    group_layouts: HashMap<u32,wgpu::BindGroupLayout>,
+    bind_groups: HashMap<BindingGroupType,wgpu::BindGroup>
 }
 impl RenderPipeline {
     pub fn new(context: &Context) -> RenderPipeline {
@@ -207,10 +222,10 @@ impl RenderPipeline {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("context/shader.wgsl"))) 
         });
         let naga_module = naga::front::wgsl::parse_str(include_str!("context/shader.wgsl")).unwrap();
-        let mut group_layouts: Vec<wgpu::BindGroupLayout> = Vec::new();
+        let mut group_layouts: HashMap<u32, wgpu::BindGroupLayout> = HashMap::new();
+        let mut entries: HashMap<u32, Vec<wgpu::BindGroupLayoutEntry>> = HashMap::new();
         for global_handle in naga_module.global_variables.iter() {
             let handle = &naga_module.global_variables[global_handle.0];
-            let mut entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
             if let Some(bindings) = &handle.binding {
                 let ty = match naga_module.types[handle.ty].inner {
                     naga::TypeInner::Struct { .. } => {
@@ -221,7 +236,13 @@ impl RenderPipeline {
                         }
                     },
                     //naga::TypeInner::Image { .. } => quote!(&'a wgpu::TextureView),
-                    //naga::TypeInner::Sampler { .. } => quote!(&'a wgpu::Sampler),
+                    naga::TypeInner::Image { .. } => {
+                        wgpu::BindingType::Texture { 
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        }
+                    }
                     //naga::TypeInner::Array { .. } => quote!(wgpu::BufferBinding<'a>),
                     _ => panic!("Unsupported type for binding fields."),
                 };
@@ -231,15 +252,21 @@ impl RenderPipeline {
                     ty: ty,
                     count: None
                 };
-                entries.push(entry);
+                if let Some(entries) = entries.get_mut(&bindings.group) {
+                    entries.push(entry);
+                } else {
+                    let mut temp_vec: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
+                    temp_vec.push(entry);
+                    entries.insert(bindings.group,temp_vec);
+                }
             }
-            if entries.len() > 0 {
-                let layout = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { 
-                    label: None,
-                    entries: &entries,
-                });
-                group_layouts.push(layout);
-            }
+        }
+        for (key, value) in entries {
+            let layout = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { 
+                label: None,
+                entries: &value,
+            });
+            group_layouts.insert(key, layout);
         }
         
         let vertex_buffers = [wgpu::VertexBufferLayout {
@@ -258,13 +285,19 @@ impl RenderPipeline {
                 },
             ],
         }];
+        let mut layout_ref:Vec<&wgpu::BindGroupLayout> = Vec::new();
+        for i in 0..group_layouts.len() as u32 {
+            if let Some(layout) = group_layouts.get(&i) {
+                layout_ref.push(layout);
+            }
+        }
         let render_pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(
                 &context.device.create_pipeline_layout(
                     &wgpu::PipelineLayoutDescriptor { 
                         label: None,
-                        bind_group_layouts: &[&group_layouts[0], &group_layouts[1]],
+                        bind_group_layouts: &layout_ref,
                         push_constant_ranges: &[], 
                     }
                 )
@@ -289,7 +322,7 @@ impl RenderPipeline {
         });
         RenderPipeline { pipeline: render_pipeline, group_layouts: group_layouts, bind_groups: HashMap::new() }
     }
-    pub fn bind_resource(&mut self, device: &wgpu::Device, group: usize, resources: Vec<wgpu::BindingResource>) {
+    pub fn bind_resource(&mut self, device: &wgpu::Device, group: BindingGroupType, resources: Vec<wgpu::BindingResource>) {
         let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
         for i in 0..resources.len() {
             let entry = wgpu::BindGroupEntry{
@@ -298,13 +331,16 @@ impl RenderPipeline {
             };
             entries.push(entry);
         }
-        self.bind_groups.entry(group).or_insert(device.create_bind_group(
-            &wgpu::BindGroupDescriptor{
-                label: None,
-                layout: &self.group_layouts[group],
-                entries: &entries,
-            }
-        ));
+        let i = group as u32;
+        if let Some(layout) = self.group_layouts.get(&i) {
+            self.bind_groups.entry(group).or_insert(device.create_bind_group(
+                &wgpu::BindGroupDescriptor{
+                    label: None,
+                    layout: layout,
+                    entries: &entries,
+                }
+            ));
+        }
     }
 }
 pub struct Material {
@@ -317,10 +353,6 @@ struct GPUMaterialData {
     pub color: [f32; 4]
 }
 
-struct GPUMesh {
-    pub model_mx: [f32; 16]
-}
-
 impl Material {
     pub fn new(context: &mut Context) -> Material {
 
@@ -330,7 +362,7 @@ impl Material {
             contents: bytemuck::bytes_of(&material_data),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        context.bind_resource_to_pipeline("shader".to_string(), 1, [material_buffer.as_entire_binding()].to_vec());
+        context.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::PerFrame, [material_buffer.as_entire_binding()].to_vec());
         Material { material_buffer }
     }
     pub fn set_color(&self, context: &Context, color: [f32; 4]) {
@@ -338,6 +370,12 @@ impl Material {
         context.queue.write_buffer(&self.material_buffer, 0, bytemuck::bytes_of(&material_data));
     }
 
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GPUMesh {
+    pub model_mx: [f32; 16]
 }
 
 #[repr(C)]
@@ -406,20 +444,28 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(device: &wgpu::Device, material: Material) -> Mesh{
+    pub fn new(context: &mut Context, material: Material) -> Mesh{
         let (verticies, indicies) = create_vertices();
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let vertex_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&verticies),
             usage: wgpu::BufferUsages::VERTEX,
         });
     
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let index_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
             contents: bytemuck::cast_slice(&indicies),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let model_ref = glam::Mat4::IDENTITY;
+        let mesh_data = GPUMesh{model_mx: model_ref.as_ref().clone()};
+        let mesh_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Buffer"),
+            contents: bytemuck::bytes_of(&mesh_data),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        context.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
 
         Mesh { vertex_buffer: vertex_buffer, index_buffer: index_buffer, indicies: indicies, verticies: verticies, material: material }
     }

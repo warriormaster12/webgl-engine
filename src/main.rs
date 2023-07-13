@@ -14,8 +14,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     context.add_render_pipeline("shader".to_string());
     let material = context::Material::new(&mut context);
     let camera = context::Camera::new(&mut context, 90.0);
-    let mesh = context::Mesh::new(&context.device, material);
-    mesh.material.set_color(&context, [0.0, 1.0, 1.0, 1.0]);
+    let mesh = context::Mesh::new(&mut context, material);
+    mesh.material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
     let mut meshes:Vec<context::Mesh> = Vec::new();
     meshes.push(mesh);
 
