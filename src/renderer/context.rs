@@ -115,7 +115,7 @@ impl Context {
                             rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[]);
                         }
                         if let Some(per_object) = pipeline.bind_groups.get(&BindingGroupType::PerObject) {
-                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_object, &[]);
+                            rpass.set_bind_group(BindingGroupType::PerObject as u32, &per_object, &[]);
                         }
                         rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                         rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
@@ -184,7 +184,7 @@ impl Camera {
     fn generate_matrix(aspect_ratio: f32, fov:f32, z_near:f32, z_far:f32) -> glam::Mat4 {
         let projection = glam::Mat4::perspective_rh(fov * consts::PI / 180., aspect_ratio, z_near, z_far);
         let view = glam::Mat4::look_at_rh(
-            glam::Vec3::new(1.5f32, -5.0, 3.0),
+            glam::Vec3::new(1.5, -5.0, 3.0),
             glam::Vec3::ZERO,
             glam::Vec3::Z,
         );
@@ -232,7 +232,7 @@ impl RenderPipeline {
                         wgpu::BindingType::Buffer { 
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
-                            min_binding_size: None 
+                            min_binding_size: None,
                         }
                     },
                     //naga::TypeInner::Image { .. } => quote!(&'a wgpu::TextureView),
@@ -435,12 +435,58 @@ fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
     (vertex_data.to_vec(), index_data.to_vec())
 }
 
+pub struct Transform {
+    translation: glam::Vec3,
+    rotation: glam::Vec3,
+    scale: glam::Vec3,
+    values_changed: bool
+}
+
+impl Transform {
+    pub fn new() -> Transform {
+        Transform { translation: glam::Vec3::ZERO, rotation: glam::Vec3::ZERO, scale: glam::Vec3::ONE, values_changed: true }
+    }
+    pub fn get_translation(&self) -> &glam::Vec3 {
+        return &self.translation;
+    }
+    pub fn set_translation(&mut self, input: glam::Vec3) {
+        self.translation = input;
+        self.values_changed = true;
+    }
+    pub fn get_scale(&self) -> &glam::Vec3 {
+        return &self.scale;
+    }
+    pub fn set_scale(&mut self, input: glam::Vec3) {
+        self.scale = input;
+        self.values_changed = true;
+    }
+    pub fn get_values_changed(&self) -> bool {
+        return self.values_changed;
+    }
+    pub fn set_values_changed(&mut self, input: bool) {
+        self.values_changed = input;
+    }
+    pub fn generate_transform_matrix(&self) -> glam::Mat4 {
+        let mut translation_mx = glam::Mat4::IDENTITY;
+        translation_mx.w_axis[0] =  self.translation.x;
+        translation_mx.w_axis[1] =  self.translation.y;
+        translation_mx.w_axis[2] =  self.translation.z;
+        let mut scale_mx = glam::Mat4::IDENTITY;
+        scale_mx.x_axis.x = self.scale.x;
+        scale_mx.y_axis.y = self.scale.y;
+        scale_mx.z_axis.z = self.scale.z;
+        return translation_mx * scale_mx;
+    }
+}
+
 pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub indicies: Vec<u16>,
     pub verticies: Vec<Vertex>,
-    pub material: Material
+    pub material: Material,
+    pub transform: Transform,
+    mesh_buffer: wgpu::Buffer,
 }
 
 impl Mesh {
@@ -458,16 +504,27 @@ impl Mesh {
             contents: bytemuck::cast_slice(&indicies),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let model_ref = glam::Mat4::IDENTITY;
-        let mesh_data = GPUMesh{model_mx: model_ref.as_ref().clone()};
-        let mesh_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let transform = Transform::new();
+        // TODO: this shouldn't be here. There should be one large buffer that handles all of the meshes
+        // Move vertex, index and mesh buffer for Context to handle
+        let mesh_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mesh Buffer"),
-            contents: bytemuck::bytes_of(&mesh_data),
+            size: mem::size_of::<GPUMesh>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         context.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
 
-        Mesh { vertex_buffer: vertex_buffer, index_buffer: index_buffer, indicies: indicies, verticies: verticies, material: material }
+        Mesh { vertex_buffer, index_buffer, indicies, verticies, material, transform, mesh_buffer }
+    }
+    pub fn update_model_mx(&mut self, context: &Context) {
+        if self.transform.get_values_changed() {
+            let model_ref = self.transform.generate_transform_matrix();
+            let mesh_data = GPUMesh{model_mx: model_ref.as_ref().clone()};
+            context.queue.write_buffer(&self.mesh_buffer, 0, bytemuck::bytes_of(&mesh_data));
+            self.transform.set_values_changed(false);
+        }
+
     }
 }
 
