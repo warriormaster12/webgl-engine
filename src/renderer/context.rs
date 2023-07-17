@@ -12,7 +12,7 @@ pub enum BindingGroupType {
     PerObject = 3,
 }
 
-const MAX_MESH_COUNT:u64 = 10;
+const MAX_MESH_COUNT:u64 = 10000;
 
 #[allow(dead_code)]
 pub struct Context {
@@ -49,7 +49,7 @@ impl Context {
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 features: wgpu::Features::empty(),
-                limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                limits: wgpu::Limits::downlevel_defaults(),
             },
             None,
         )
@@ -100,7 +100,7 @@ impl Context {
             let mesh_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Mesh Buffer"),
                 size: mem::size_of::<GPUMesh>() as u64 * MAX_MESH_COUNT,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
@@ -264,7 +264,11 @@ impl RenderPipeline {
                 let ty = match naga_module.types[handle.ty].inner {
                     naga::TypeInner::Struct { .. } => {
                         wgpu::BindingType::Buffer { 
-                            ty: wgpu::BufferBindingType::Uniform,
+                            ty: if handle.space == naga::AddressSpace::Uniform {
+                                wgpu::BufferBindingType::Uniform
+                            } else {
+                                wgpu::BufferBindingType::Storage { read_only: true }
+                            },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         }
