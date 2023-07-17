@@ -14,16 +14,16 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     context.add_render_pipeline("shader".to_string());
     let material = context::Material::new(&mut context);
     let camera = context::Camera::new(&mut context, 90.0);
-    let mesh = context::Mesh::new(&mut context, material);
+    context.create_mesh("cube".to_string(), material);
     let material2 = context::Material::new(&mut context);
-    let mut mesh2 = context::Mesh::new(&mut context, material2);
-    mesh.material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
-    mesh2.material.set_color(&context, [1.0, 1.0, 1.0, 1.0]);
-    mesh2.transform.set_translation(glam::Vec3 { x: 0.0, y: 1.0, z: 0.0 });
-    let mut meshes:Vec<context::Mesh> = Vec::new();
-    meshes.push(mesh);
-    meshes.push(mesh2);
-
+    context.create_mesh("cube2".to_string(), material2);
+    if let Some(mesh) = context.get_mesh("cube".to_string()) {
+        mesh.material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
+    }
+    if let Some(mesh) = context.get_mesh("cube2".to_string()) {
+        mesh.material.set_color(&context,  [1.0, 1.0, 1.0, 1.0]);
+    }
+    context.bind_meshes_to_pipeline();
     event_loop.run(move |event, _, control_flow| {
 
         *control_flow = ControlFlow::Wait;
@@ -35,14 +35,11 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 // Reconfigure the surface with the new size
                 context.update_swapchain((size.width, size.height));
                 camera.update(&context);
-                for mesh in &mut meshes {
-                    mesh.update_model_mx(&context);
-                }
                 // On macos the window needs to be redrawn manually after resizing
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                context.present(&meshes);
+                context.present();
                 window.request_redraw(); // with this call inside RedrawRequested event, we can tell the window to basically redraw every frame
             }
             Event::WindowEvent {

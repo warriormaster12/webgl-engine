@@ -12,6 +12,8 @@ pub enum BindingGroupType {
     PerObject = 3,
 }
 
+const MAX_MESH_COUNT:u64 = 10;
+
 #[allow(dead_code)]
 pub struct Context {
     instance: wgpu::Instance,
@@ -22,6 +24,8 @@ pub struct Context {
     swapchain: Swapchain,
     pub surface: wgpu::Surface,
     render_pipelines: HashMap<String, RenderPipeline>,
+    meshes: Vec<Mesh>,
+    buffers: HashMap<String, wgpu::Buffer>,
 }
 
 use bytemuck::{Pod, Zeroable};
@@ -52,7 +56,7 @@ impl Context {
         .await
         .expect("Failed to create device");
         let swapchain = Swapchain::new(&adapter, &device, &surface, (window.inner_size().width, window.inner_size().height));
-        Context {instance, adapter, device, queue,surface,swapchain, render_pipelines: HashMap::new()}
+        Context {instance, adapter, device, queue,surface,swapchain, render_pipelines: HashMap::new(), meshes: Vec::new(), buffers: HashMap::new()}
     } 
 
     pub fn get_swapchain(&self)-> &Swapchain {
@@ -79,13 +83,38 @@ impl Context {
         return None;
     }
 
+    pub fn create_mesh(&mut self, id: String,material: Material) {
+        let mesh = Mesh::new(self, id,material);
+        self.meshes.push(mesh);
+    }
+
+    pub fn get_mesh(&self, id: String) -> Option<&Mesh> {
+        if let Some(mesh) = self.meshes.iter().find(|&m| m.id == id) {
+            return Some(mesh);
+        }
+        return None;
+    }
+
+    pub fn bind_meshes_to_pipeline(&mut self) {
+        if self.buffers.get("mesh buffer").is_none() {
+            let mesh_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Mesh Buffer"),
+                size: mem::size_of::<GPUMesh>() as u64 * MAX_MESH_COUNT,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
+            self.buffers.insert("mesh buffer".to_string(), mesh_buffer);
+        }
+    }
+
     pub fn bind_resource_to_pipeline(&mut self, id: String, group: BindingGroupType, resources: Vec<wgpu::BindingResource<'_>>) {
         if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
             pipeline.bind_resource(&self.device, group, resources)
         }
     }
 
-    fn draw(&self, view: wgpu::TextureView, meshes: &Vec<Mesh>) {
+    fn draw(&mut self, view: wgpu::TextureView) {
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
@@ -110,16 +139,21 @@ impl Context {
                     if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
                         rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[]);
                     }
-                    for i in 0..meshes.len() {
+                    for i in 0..self.meshes.len() {
+                        if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
+                            if let Some(buffer) = self.buffers.get(&buffer_id) {
+                                self.queue.write_buffer(buffer, 0, bytemuck::bytes_of(&data));
+                            }
+                        }
                         if let Some(per_resource) = pipeline.bind_groups.get(&BindingGroupType::Resource) {
                             rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[]);
                         }
                         if let Some(per_object) = pipeline.bind_groups.get(&BindingGroupType::PerObject) {
                             rpass.set_bind_group(BindingGroupType::PerObject as u32, &per_object, &[]);
                         }
-                        rpass.set_index_buffer(meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                        rpass.set_vertex_buffer(0, meshes[i].vertex_buffer.slice(..));
-                        rpass.draw_indexed(0..meshes[i].indicies.len() as u32, 0, 0..1);
+                        rpass.set_index_buffer(self.meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                        rpass.set_vertex_buffer(0, self.meshes[i].vertex_buffer.slice(..));
+                        rpass.draw_indexed(0..self.meshes[i].indicies.len() as u32, 0, 0..1);
                     }
                 }
 
@@ -128,11 +162,11 @@ impl Context {
         self.queue.submit(Some(encoder.finish()));
     }
 
-    pub fn present(&self, meshes: &Vec<Mesh>) {
+    pub fn present(&mut self) {
         let frame = self.surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()),meshes);
+        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()));
         frame.present();
     }
     
@@ -374,7 +408,7 @@ impl Material {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct GPUMesh {
+pub struct GPUMesh {
     pub model_mx: [f32; 16]
 }
 
@@ -480,17 +514,17 @@ impl Transform {
 }
 
 pub struct Mesh {
+    id: String,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub indicies: Vec<u16>,
     pub verticies: Vec<Vertex>,
     pub material: Material,
     pub transform: Transform,
-    mesh_buffer: wgpu::Buffer,
 }
 
 impl Mesh {
-    pub fn new(context: &mut Context, material: Material) -> Mesh{
+    pub fn new(context: &mut Context, id:String, material: Material) -> Mesh{
         let (verticies, indicies) = create_vertices();
 
         let vertex_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -507,23 +541,17 @@ impl Mesh {
         let transform = Transform::new();
         // TODO: this shouldn't be here. There should be one large buffer that handles all of the meshes
         // Move vertex, index and mesh buffer for Context to handle
-        let mesh_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Mesh Buffer"),
-            size: mem::size_of::<GPUMesh>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        context.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
+        
 
-        Mesh { vertex_buffer, index_buffer, indicies, verticies, material, transform, mesh_buffer }
+        Mesh { id, vertex_buffer, index_buffer, indicies, verticies, material, transform }
     }
-    pub fn update_model_mx(&mut self, context: &Context) {
+    pub fn update_model_mx(&self) -> Option<(String, GPUMesh)>{
         if self.transform.get_values_changed() {
             let model_ref = self.transform.generate_transform_matrix();
             let mesh_data = GPUMesh{model_mx: model_ref.as_ref().clone()};
-            context.queue.write_buffer(&self.mesh_buffer, 0, bytemuck::bytes_of(&mesh_data));
-            self.transform.set_values_changed(false);
+            return Some(("mesh buffer".to_string(), mesh_data));
         }
+        return None;
 
     }
 }
