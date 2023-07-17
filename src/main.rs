@@ -20,8 +20,9 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     if let Some(mesh) = context.get_mesh("cube".to_string()) {
         mesh.material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
     }
-    if let Some(mesh) = context.get_mesh("cube2".to_string()) {
-        mesh.material.set_color(&context,  [1.0, 1.0, 1.0, 1.0]);
+    if let Some(mesh) = context.get_mesh_mut("cube2".to_string()) {
+        //mesh.material.set_color(&context,  [1.0, 1.0, 1.0, 1.0]);
+        mesh.transform.set_translation(glam::Vec3 {x: 1.0, y: 0.0, z: 1.0});
     }
     context.bind_meshes_to_pipeline();
     event_loop.run(move |event, _, control_flow| {

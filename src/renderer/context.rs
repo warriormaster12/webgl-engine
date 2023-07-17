@@ -95,15 +95,24 @@ impl Context {
         return None;
     }
 
+    pub fn get_mesh_mut(&mut self, id: String) -> Option<&mut Mesh> {
+        if let Some(mesh) = self.meshes.iter_mut().find(|m| m.id == id) {
+            return Some(mesh);
+        }
+        return None;
+    }
+
     pub fn bind_meshes_to_pipeline(&mut self) {
         if self.buffers.get("mesh buffer").is_none() {
             let mesh_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Mesh Buffer"),
-                size: mem::size_of::<GPUMesh>() as u64 * MAX_MESH_COUNT,
+                size: self.get_uniform_aligned_buffer_size(mem::size_of::<GPUMesh>() as u64 * MAX_MESH_COUNT),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            self.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [mesh_buffer.as_entire_binding()].to_vec());
+            self.bind_resource_to_pipeline("shader".to_string(), BindingGroupType::Resource, [wgpu::BindingResource::Buffer(
+                wgpu::BufferBinding { buffer: &mesh_buffer, offset: 0, size: wgpu::BufferSize::new(GPUMesh::get_size())}
+            )].to_vec());
             self.buffers.insert("mesh buffer".to_string(), mesh_buffer);
         }
     }
@@ -113,6 +122,34 @@ impl Context {
             pipeline.bind_resource(&self.device, group, resources)
         }
     }
+
+    pub fn present(&mut self) {
+        let frame = self.surface
+            .get_current_texture()
+            .expect("Failed to acquire next swap chain texture");
+        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        frame.present();
+    }
+
+    pub fn get_uniform_aligned_buffer_size(&self, value: wgpu::BufferAddress) -> u64 {
+        let uniform_alignment = {
+            let alignment =
+                self.device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
+            wgpu::util::align_to(value, alignment)
+        };
+        uniform_alignment
+    }
+
+    pub fn get_storage_aligned_buffer_size(&self, value: wgpu::BufferAddress) -> u64 {
+        let storage_alignment = {
+            let alignment =
+                self.device.limits().min_storage_buffer_offset_alignment as wgpu::BufferAddress;
+            wgpu::util::align_to(value, alignment)
+        };
+        storage_alignment
+    }
+
+    //private
 
     fn draw(&mut self, view: wgpu::TextureView) {
         let mut encoder =
@@ -130,26 +167,28 @@ impl Context {
                 })],
                 depth_stencil_attachment: None,
             });
+            
             for pipeline in self.render_pipelines.values() {
                 rpass.set_pipeline(&pipeline.pipeline);
                 if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
                     if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global) {
-                        rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[]);
+                        rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[0]);
                     }
                     if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
-                        rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[]);
+                        rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[0]);
                     }
                     for i in 0..self.meshes.len() {
+                        let offset:wgpu::DynamicOffset= (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as _;
                         if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
                             if let Some(buffer) = self.buffers.get(&buffer_id) {
-                                self.queue.write_buffer(buffer, 0, bytemuck::bytes_of(&data));
+                                self.queue.write_buffer(buffer, offset as wgpu::BufferAddress, bytemuck::bytes_of(&data));
                             }
                         }
                         if let Some(per_resource) = pipeline.bind_groups.get(&BindingGroupType::Resource) {
-                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[]);
+                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[offset]);
                         }
                         if let Some(per_object) = pipeline.bind_groups.get(&BindingGroupType::PerObject) {
-                            rpass.set_bind_group(BindingGroupType::PerObject as u32, &per_object, &[]);
+                            rpass.set_bind_group(BindingGroupType::PerObject as u32, &per_object, &[0]);
                         }
                         rpass.set_index_buffer(self.meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                         rpass.set_vertex_buffer(0, self.meshes[i].vertex_buffer.slice(..));
@@ -160,14 +199,6 @@ impl Context {
             }
         }
         self.queue.submit(Some(encoder.finish()));
-    }
-
-    pub fn present(&mut self) {
-        let frame = self.surface
-            .get_current_texture()
-            .expect("Failed to acquire next swap chain texture");
-        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()));
-        frame.present();
     }
     
 }
@@ -186,7 +217,7 @@ impl Swapchain{
             format: swapchain_format,
             width: resolution.0,
             height: resolution.1,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: swapchain_capabilities.alpha_modes[0],
             view_formats: vec![],
         };
@@ -269,7 +300,7 @@ impl RenderPipeline {
                             } else {
                                 wgpu::BufferBindingType::Storage { read_only: true }
                             },
-                            has_dynamic_offset: false,
+                            has_dynamic_offset: true,
                             min_binding_size: None,
                         }
                     },
@@ -414,6 +445,12 @@ impl Material {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GPUMesh {
     pub model_mx: [f32; 16]
+}
+
+impl GPUMesh {
+    pub fn get_size() -> u64 {
+        return mem::size_of::<Self>() as u64;
+    }
 }
 
 #[repr(C)]
