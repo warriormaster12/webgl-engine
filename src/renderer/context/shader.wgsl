@@ -36,7 +36,7 @@ struct Material {
 }
 @group(1) 
 @binding(0)
-var<uniform> material_data: Material;
+var<storage> material_data: Material;
 
 // @group(1)
 // @binding(1)
