@@ -36,8 +36,6 @@ impl Default for BindingResource {
     }
 }
 
-const MAX_MESH_COUNT:u64 = 10000;
-
 #[allow(dead_code)]
 pub struct Context {
     instance: wgpu::Instance,
@@ -47,7 +45,7 @@ pub struct Context {
     //swapchain
     swapchain: Swapchain,
     pub surface: wgpu::Surface,
-    render_pipelines: HashMap<String, RenderPipeline>,
+    render_pipelines: HashMap<RenderPipelineSettings, RenderPipeline>,
     meshes: Vec<Mesh>,
     buffers: HashMap<String, wgpu::Buffer>,
 }
@@ -93,18 +91,11 @@ impl Context {
         self.surface.configure(&self.device, &self.swapchain.config);
     }
 
-    pub fn add_render_pipeline(&mut self, id: &str) {
-        if self.render_pipelines.get(&id.to_string()).is_none() {
-            let pipeline = RenderPipeline::new(self);
-            self.render_pipelines.insert(id.to_string(), pipeline);
+    pub fn add_render_pipeline(&mut self, id: &RenderPipelineSettings) {
+        if self.render_pipelines.get(&id).is_none() {
+            let pipeline = RenderPipeline::new(self, id);
+            self.render_pipelines.insert(id.clone(), pipeline);
         }
-    }
-
-    pub fn get_pipeline(&mut self, id: &str) -> Option<&mut RenderPipeline> {
-        if self.render_pipelines.get(&id.to_string()).is_some() {
-            return self.render_pipelines.get_mut(&id.to_string());
-        }
-        return None;
     }
 
     pub fn create_mesh(&mut self, id: &str,material: Material) {
@@ -125,21 +116,6 @@ impl Context {
         }
         return None;
     }
-
-    // pub fn bind_meshes_to_pipeline(&mut self) {
-    //     if self.buffers.get("mesh buffer").is_none() {
-    //         let mesh_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-    //             label: Some("Mesh Buffer"),
-    //             size: self.get_uniform_aligned_buffer_size(mem::size_of::<GPUMesh>() as u64 * MAX_MESH_COUNT),
-    //             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    //             mapped_at_creation: false,
-    //         });
-    //         self.bind_resource_to_pipeline("shader", BindingGroupType::Resource, [wgpu::BindingResource::Buffer(
-    //             wgpu::BufferBinding { buffer: &mesh_buffer, offset: 0, size: wgpu::BufferSize::new(GPUMesh::get_size())}
-    //         )].to_vec());
-    //         self.buffers.insert("mesh buffer".to_string(), mesh_buffer);
-    //     }
-    // }
 
     pub fn create_buffer(&mut self, id: &str, size: u64, usage: wgpu::BufferUsages, mapped_at_creation:Option<bool>) {
         if self.buffers.get(id).is_none() {
@@ -176,12 +152,8 @@ impl Context {
         }
     }
 
-    pub fn get_buffer(&self, id: &str) -> Option<&wgpu::Buffer> {
-        return self.buffers.get(id);
-    }
-
-    pub fn bind_resource_to_pipeline(&mut self, id: &str, group: BindingGroupType, resources: Vec<BindingResource>) {
-        if let Some(pipeline) = self.render_pipelines.get_mut(&id.to_string()) {
+    pub fn bind_resources_to_pipeline(&mut self, id: &RenderPipelineSettings, group: BindingGroupType, resources: Vec<BindingResource>) {
+        if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
             let mut res: Vec<wgpu::BindingResource<'_>> = Vec::new();
             for resource in resources {
                 match resource.resource_type {
@@ -346,8 +318,11 @@ impl Camera {
         let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
         context.create_buffer_init("camera_buffer", bytemuck::cast_slice(mx_ref), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
-        context.bind_resource_to_pipeline("shader", BindingGroupType::Global, [BindingResource{id: "camera_buffer".to_string(), ..BindingResource::default()}].to_vec());
         Camera { fov: fov, is_active: true }
+    }
+
+    pub fn bind_to_pipeline(&self, context: &mut Context, pipeline_settings: &RenderPipelineSettings) {
+        
     }
 
     pub fn update(&self, context: &Context) {
@@ -357,19 +332,30 @@ impl Camera {
     }
 }
 
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
+pub struct RenderPipelineSettings {
+    pub shader: &'static str,
+    pub cull_mode: wgpu::Face,
+}
+
+impl Default for RenderPipelineSettings {
+    fn default() -> Self {
+        Self { shader: "", cull_mode: wgpu::Face::Back }
+    }
+}
 pub struct RenderPipeline {
     pipeline: wgpu::RenderPipeline,
     group_layouts: HashMap<u32,wgpu::BindGroupLayout>,
     bind_groups: HashMap<BindingGroupType,wgpu::BindGroup>
 }
 impl RenderPipeline {
-    pub fn new(context: &Context) -> RenderPipeline {
+    pub fn new(context: &Context, settings: &RenderPipelineSettings) -> RenderPipeline {
         //Shader and pipeline
         let module = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { 
             label: None, 
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("context/shader.wgsl"))) 
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(settings.shader)) 
         });
-        let naga_module = naga::front::wgsl::parse_str(include_str!("context/shader.wgsl")).unwrap();
+        let naga_module = naga::front::wgsl::parse_str(settings.shader).unwrap();
         let mut group_layouts: HashMap<u32, wgpu::BindGroupLayout> = HashMap::new();
         let mut entries: HashMap<u32, Vec<wgpu::BindGroupLayoutEntry>> = HashMap::new();
         for global_handle in naga_module.global_variables.iter() {
@@ -465,7 +451,7 @@ impl RenderPipeline {
                 targets: &[Some(context.get_swapchain().get_format().into())],
             }),
             primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: Some(settings.cull_mode),
                 ..Default::default()
             },
             depth_stencil: None,
@@ -503,18 +489,19 @@ struct GPUMaterialData {
     pub color: [f32; 4]
 }
 
+#[derive(Clone, Copy)]
 pub struct Material {
-    id: String,
+    id: &'static str,
+    pub pipeline_settings: RenderPipelineSettings,
 }
 
 impl Material {
-    pub fn new(context: &mut Context, id: &str) -> Material {
+    pub fn new(context: &mut Context, id: &'static str) -> Material {
 
         let material_data = GPUMaterialData {color: [1.0,1.0,1.0,1.0]};
         context.create_buffer_init("material_buffer", bytemuck::bytes_of(&material_data), wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST);
-        context.bind_resource_to_pipeline("shader", BindingGroupType::PerFrame, [BindingResource{id: "material_buffer".to_string(), ..BindingResource::default()}].to_vec());
 
-        Material { id: id.to_string() }
+        Material { id: id, pipeline_settings: RenderPipelineSettings::default() }
     }
     pub fn set_color(&self, context: &Context, color: [f32; 4]) {
         let material_data = GPUMaterialData {color};
