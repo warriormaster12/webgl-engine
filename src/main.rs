@@ -25,28 +25,26 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     context.bind_resources_to_pipeline(
         &material.pipeline_settings, 
         context::BindingGroupType::Resource, 
-        [context::BindingResource {
-            id: "mesh_buffer".to_string(), 
+        &[context::BindingResource {
+            id: "mesh_buffer", 
             resource_type: context::BindingResourceType::Buffer, 
             entire_binding: false, 
             offset: 0, 
             size: context::GPUMesh::get_size() }
-        ].to_vec()
+        ]
     );
     context.bind_resources_to_pipeline(
         &material.pipeline_settings, 
         context::BindingGroupType::Global, 
-        [context::BindingResource{id: "camera_buffer".to_string(), ..context::BindingResource::default()}].to_vec()
+        &[context::BindingResource{id: "camera_buffer", ..context::BindingResource::default()}]
     );
     context.bind_resources_to_pipeline(
         &material.pipeline_settings, 
         context::BindingGroupType::PerFrame, 
-        [context::BindingResource{id: "material_buffer".to_string(), ..context::BindingResource::default()}].to_vec()
+        &[context::BindingResource{id: "material_buffer", ..context::BindingResource::default()}]
     );
     context.create_mesh("cube2", material2);
-    if let Some(mesh) = context.get_mesh("cube") {
-        mesh.material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
-    }
+    material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
     if let Some(mesh) = context.get_mesh_mut("cube2") {
         //mesh.material.set_color(&context,  [1.0, 1.0, 1.0, 1.0]);
         mesh.transform.set_translation(glam::Vec3 {x: 1.0, y: 0.0, z: 1.0});

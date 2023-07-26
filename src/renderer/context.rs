@@ -23,7 +23,7 @@ pub enum BindingResourceType {
 }
 #[derive(Clone)]
 pub struct BindingResource {
-    pub id: String,
+    pub id: &'static str,
     pub resource_type: BindingResourceType,
     pub entire_binding: bool, // if true, offset and size are ignored
     pub offset: wgpu::BufferAddress,
@@ -32,7 +32,7 @@ pub struct BindingResource {
 
 impl Default for BindingResource {
     fn default() -> Self {
-        Self {id: "None".to_string(), resource_type: BindingResourceType::Buffer, entire_binding: true, offset: 0, size: 0}
+        Self {id: "None", resource_type: BindingResourceType::Buffer, entire_binding: true, offset: 0, size: 0}
     }
 }
 
@@ -99,7 +99,7 @@ impl Context {
     }
 
     pub fn create_mesh(&mut self, id: &str,material: Material) {
-        let mesh = Mesh::new(self, id.to_string(),material);
+        let mesh = Mesh::new(self, id,material);
         self.meshes.push(mesh);
     }
 
@@ -152,13 +152,13 @@ impl Context {
         }
     }
 
-    pub fn bind_resources_to_pipeline(&mut self, id: &RenderPipelineSettings, group: BindingGroupType, resources: Vec<BindingResource>) {
+    pub fn bind_resources_to_pipeline(&mut self, id: &RenderPipelineSettings, group: BindingGroupType, resources: &[BindingResource]) {
         if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
             let mut res: Vec<wgpu::BindingResource<'_>> = Vec::new();
             for resource in resources {
                 match resource.resource_type {
                     BindingResourceType::Buffer => {
-                        if let Some(buffer) = self.buffers.get(&resource.id) {
+                        if let Some(buffer) = self.buffers.get(&resource.id.to_string()) {
                             if resource.entire_binding {
                                 res.push(buffer.as_entire_binding());
                             } else {
@@ -225,13 +225,11 @@ impl Context {
             });
             for i in 0..self.meshes.len() {
                 let offset: u64 = (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
-                let mut id: String = String::new();
-                let mut mesh_data = GPUMesh::new();
                 if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
-                    id = buffer_id.to_string();
-                    mesh_data = data;
+                    let id = buffer_id.to_string();
+                    let mesh_data = data;
+                    self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
                 }
-                self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
             }
             for pipeline in self.render_pipelines.values() {
                 rpass.set_pipeline(&pipeline.pipeline);
@@ -321,10 +319,6 @@ impl Camera {
         Camera { fov: fov, is_active: true }
     }
 
-    pub fn bind_to_pipeline(&self, context: &mut Context, pipeline_settings: &RenderPipelineSettings) {
-        
-    }
-
     pub fn update(&self, context: &Context) {
         let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), self.fov, 1.0, 100.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
@@ -336,11 +330,20 @@ impl Camera {
 pub struct RenderPipelineSettings {
     pub shader: &'static str,
     pub cull_mode: wgpu::Face,
+    pub depth_testing: bool,
+    pub depth_write_enabled: bool,
+    pub depth_compare: wgpu::CompareFunction,
 }
 
 impl Default for RenderPipelineSettings {
     fn default() -> Self {
-        Self { shader: "", cull_mode: wgpu::Face::Back }
+        Self { 
+            shader: "", 
+            cull_mode: wgpu::Face::Back, 
+            depth_testing: false, 
+            depth_write_enabled: true, 
+            depth_compare: wgpu::CompareFunction::LessEqual 
+        }
     }
 }
 pub struct RenderPipeline {
@@ -454,7 +457,17 @@ impl RenderPipeline {
                 cull_mode: Some(settings.cull_mode),
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: if settings.depth_testing {
+                Some(wgpu::DepthStencilState { 
+                    format: wgpu::TextureFormat::Depth32Float, 
+                    depth_write_enabled: settings.depth_write_enabled, 
+                    depth_compare: settings.depth_compare, 
+                    stencil: wgpu::StencilState::default(), 
+                    bias: wgpu::DepthBiasState::default() 
+                })
+            } else {
+                None
+            },
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
@@ -638,7 +651,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(context: &mut Context, id:String, material: Material) -> Mesh{
+    pub fn new(context: &mut Context, id:&str, material: Material) -> Mesh{
         let (verticies, indicies) = create_vertices();
 
         let vertex_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -657,7 +670,7 @@ impl Mesh {
         // Move vertex, index and mesh buffer for Context to handle
         
 
-        Mesh { id, vertex_buffer, index_buffer, indicies, verticies, material, transform }
+        Mesh { id: id.to_string(), vertex_buffer, index_buffer, indicies, verticies, material, transform }
     }
     pub fn update_model_mx(&mut self) -> Option<(&str, GPUMesh)>{
         if self.transform.get_values_changed() {
