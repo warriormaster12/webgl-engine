@@ -86,8 +86,7 @@ impl Context {
     }
 
     pub fn update_swapchain(&mut self, resolution: (u32, u32)) {
-        self.swapchain.config.width = resolution.0;
-        self.swapchain.config.height = resolution.1;
+        self.swapchain.update(&self.device, resolution.0, resolution.1);
         self.surface.configure(&self.device, &self.swapchain.config);
     }
 
@@ -211,6 +210,14 @@ impl Context {
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
+            for i in 0..self.meshes.len() {
+                let offset: u64 = (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
+                if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
+                    let id = buffer_id.to_string();
+                    let mesh_data = data;
+                    self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
+                }
+            }
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -221,16 +228,15 @@ impl Context {
                         store: true,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { 
+                    view: &self.get_swapchain().depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: false,
+                    }),
+                    stencil_ops: None, 
+                }),
             });
-            for i in 0..self.meshes.len() {
-                let offset: u64 = (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
-                if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
-                    let id = buffer_id.to_string();
-                    let mesh_data = data;
-                    self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
-                }
-            }
             for pipeline in self.render_pipelines.values() {
                 rpass.set_pipeline(&pipeline.pipeline);
                 if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
@@ -261,7 +267,9 @@ impl Context {
     
 }
 pub struct Swapchain {
-    config: wgpu::SurfaceConfiguration
+    config: wgpu::SurfaceConfiguration,
+    depth_view: wgpu::TextureView,
+    depth_format: wgpu::TextureFormat,
 }
 
 impl Swapchain{
@@ -279,10 +287,48 @@ impl Swapchain{
             alpha_mode: swapchain_capabilities.alpha_modes[0],
             view_formats: vec![],
         };
+        let depth_format = wgpu::TextureFormat::Depth32Float;
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor{
+            size: wgpu::Extent3d{
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: depth_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: Some("Swapchain depth texture"),
+            view_formats: &[]
+        });
+
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         surface.configure(&device, &config);
 
-        Swapchain {config: config}
+        Swapchain {config: config, depth_view, depth_format}
+    }
+
+    fn update(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.config.width = width;
+        self.config.height = height;
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor{
+            size: wgpu::Extent3d{
+                width: width,
+                height: height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.depth_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: Some("Swapchain depth texture"),
+            view_formats: &[]
+        });
+
+        self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 
     pub fn get_resolution(&self) -> (u32, u32) {
@@ -295,6 +341,10 @@ impl Swapchain{
 
     pub fn get_format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+
+    pub fn get_depth_format(&self) -> wgpu::TextureFormat {
+        self.depth_format
     }
 }
 
@@ -459,7 +509,7 @@ impl RenderPipeline {
             },
             depth_stencil: if settings.depth_testing {
                 Some(wgpu::DepthStencilState { 
-                    format: wgpu::TextureFormat::Depth32Float, 
+                    format: context.get_swapchain().depth_format, 
                     depth_write_enabled: settings.depth_write_enabled, 
                     depth_compare: settings.depth_compare, 
                     stencil: wgpu::StencilState::default(), 

@@ -17,6 +17,8 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     context.create_buffer("mesh_buffer", context.get_storage_aligned_buffer_size(mem::size_of::<context::GPUMesh>() as u64 * MAX_MESH_COUNT), wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, None);
     let mut material = context::Material::new(&mut context, "test");
     material.pipeline_settings.shader = include_str!("renderer/context/shader.wgsl");
+    material.pipeline_settings.depth_testing = true;
+    material.pipeline_settings.depth_compare = wgpu::CompareFunction::LessEqual;
     let camera = context::Camera::new(&mut context, 90.0);
     context.create_mesh("cube", material);
     let material2 = context::Material::new(&mut context, "test2");
@@ -47,7 +49,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
     material.set_color(&context, [1.0, 1.0, 0.0, 1.0]);
     if let Some(mesh) = context.get_mesh_mut("cube2") {
         //mesh.material.set_color(&context,  [1.0, 1.0, 1.0, 1.0]);
-        mesh.transform.set_translation(glam::Vec3 {x: 1.0, y: 0.0, z: 1.0});
+        mesh.transform.set_translation(glam::Vec3 {x: 5.0, y: 0.0, z: -2.0});
     }
     let mut rotation = 0.0;
     event_loop.run(move |event, _, control_flow| {
