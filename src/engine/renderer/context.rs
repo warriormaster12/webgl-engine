@@ -365,7 +365,6 @@ impl Camera {
     pub fn new(context: &mut Context, fov: f32) -> Camera {
         let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
-        context.create_buffer_init("camera_buffer", bytemuck::cast_slice(mx_ref), wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
         Camera { fov: fov, is_active: true }
     }
 
@@ -548,7 +547,7 @@ impl RenderPipeline {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct GPUMaterialData {
+pub struct GPUMaterialData {
     pub color: [f32; 4]
 }
 
