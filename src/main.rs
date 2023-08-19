@@ -1,16 +1,16 @@
 use winit::{
+    dpi::PhysicalSize,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::Window, dpi::PhysicalSize,
+    window::Window,
 };
 
 mod engine;
 use engine::Engine;
 
 async fn run(event_loop: EventLoop<()>, window: Window) {
-    let mut eng = Engine::new(&window, ||{}).await;
+    let mut eng = Engine::new(&window, || {}).await;
     event_loop.run(move |event, _, control_flow| {
-
         *control_flow = ControlFlow::Wait;
         match event {
             Event::WindowEvent {
@@ -23,7 +23,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                eng.update(||{});
+                eng.update(|| {});
                 window.request_redraw(); // with this call inside RedrawRequested event, we can tell the window to basically redraw every frame
             }
             Event::WindowEvent {

@@ -1,5 +1,5 @@
-use std::{mem, f32::consts, borrow::Cow, collections::HashMap};
 use naga;
+use std::{borrow::Cow, collections::HashMap, f32::consts, mem};
 
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -27,12 +27,18 @@ pub struct BindingResource {
     pub resource_type: BindingResourceType,
     pub entire_binding: bool, // if true, offset and size are ignored
     pub offset: wgpu::BufferAddress,
-    pub size: u64
+    pub size: u64,
 }
 
 impl Default for BindingResource {
     fn default() -> Self {
-        Self {id: "None", resource_type: BindingResourceType::Buffer, entire_binding: true, offset: 0, size: 0}
+        Self {
+            id: "None",
+            resource_type: BindingResourceType::Buffer,
+            entire_binding: true,
+            offset: 0,
+            size: 0,
+        }
     }
 }
 
@@ -55,38 +61,54 @@ impl Context {
     pub async fn new(window: &Window) -> Context {
         //Instance and device init
         let instance = wgpu::Instance::default();
-        let surface = unsafe {
-            instance.create_surface(&window)
-        }.unwrap();
+        let surface = unsafe { instance.create_surface(&window) }.unwrap();
 
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions { 
-            power_preference: wgpu::PowerPreference::default(), 
-            force_fallback_adapter: false, 
-            compatible_surface: Some(&surface),
-        })
-        .await
-        .expect("Failed to find an appropriate adapter");
-        
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .expect("Failed to find an appropriate adapter");
+
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                features: wgpu::Features::empty(),
-                limits: wgpu::Limits::downlevel_defaults(),
-            },
-            None,
-        )
-        .await
-        .expect("Failed to create device");
-        let swapchain = Swapchain::new(&adapter, &device, &surface, (window.inner_size().width, window.inner_size().height));
-        Context {instance, adapter, device, queue,surface,swapchain, render_pipelines: HashMap::new(), meshes: Vec::new(), buffers: HashMap::new()}
-    } 
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    features: wgpu::Features::empty(),
+                    limits: wgpu::Limits::downlevel_defaults(),
+                },
+                None,
+            )
+            .await
+            .expect("Failed to create device");
+        let swapchain = Swapchain::new(
+            &adapter,
+            &device,
+            &surface,
+            (window.inner_size().width, window.inner_size().height),
+        );
+        Context {
+            instance,
+            adapter,
+            device,
+            queue,
+            surface,
+            swapchain,
+            render_pipelines: HashMap::new(),
+            meshes: Vec::new(),
+            buffers: HashMap::new(),
+        }
+    }
 
-    pub fn get_swapchain(&self)-> &Swapchain {
+    pub fn get_swapchain(&self) -> &Swapchain {
         return &self.swapchain;
     }
 
     pub fn update_swapchain(&mut self, resolution: (u32, u32)) {
-        self.swapchain.update(&self.device, resolution.0, resolution.1);
+        self.swapchain
+            .update(&self.device, resolution.0, resolution.1);
         self.surface.configure(&self.device, &self.swapchain.config);
     }
 
@@ -97,8 +119,8 @@ impl Context {
         }
     }
 
-    pub fn create_mesh(&mut self, id: &str,material: Material) {
-        let mesh = Mesh::new(self, id,material);
+    pub fn create_mesh(&mut self, id: &str, material: Material) {
+        let mesh = Mesh::new(self, id, material);
         self.meshes.push(mesh);
     }
 
@@ -116,7 +138,13 @@ impl Context {
         return None;
     }
 
-    pub fn create_buffer(&mut self, id: &str, size: u64, usage: wgpu::BufferUsages, mapped_at_creation:Option<bool>) {
+    pub fn create_buffer(
+        &mut self,
+        id: &str,
+        size: u64,
+        usage: wgpu::BufferUsages,
+        mapped_at_creation: Option<bool>,
+    ) {
         if self.buffers.get(id).is_none() {
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(id),
@@ -126,7 +154,7 @@ impl Context {
                     state
                 } else {
                     false
-                }
+                },
             });
             self.buffers.insert(id.to_string(), buffer);
         }
@@ -134,11 +162,13 @@ impl Context {
 
     pub fn create_buffer_init(&mut self, id: &str, contents: &[u8], usage: wgpu::BufferUsages) {
         if self.buffers.get(id).is_none() {
-            let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(id),
-                contents: contents,
-                usage: usage,
-            });
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(id),
+                    contents: contents,
+                    usage: usage,
+                });
             self.buffers.insert(id.to_string(), buffer);
         }
     }
@@ -151,7 +181,12 @@ impl Context {
         }
     }
 
-    pub fn bind_resources_to_pipeline(&mut self, id: &RenderPipelineSettings, group: BindingGroupType, resources: &[BindingResource]) {
+    pub fn bind_resources_to_pipeline(
+        &mut self,
+        id: &RenderPipelineSettings,
+        group: BindingGroupType,
+        resources: &[BindingResource],
+    ) {
         if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
             let mut res: Vec<wgpu::BindingResource<'_>> = Vec::new();
             for resource in resources {
@@ -161,17 +196,21 @@ impl Context {
                             if resource.entire_binding {
                                 res.push(buffer.as_entire_binding());
                             } else {
-                                res.push(wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &buffer, offset: resource.offset, size: wgpu::BufferSize::new(resource.size)}));
+                                res.push(wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &buffer,
+                                    offset: resource.offset,
+                                    size: wgpu::BufferSize::new(resource.size),
+                                }));
                             }
                         } else {
                             println!("buffer by id {} not found", resource.id)
                         }
-                    },
-                    BindingResourceType::BufferArray => {},
-                    BindingResourceType::Sampler => {},
-                    BindingResourceType::SamplerArray => {},
-                    BindingResourceType::TextureView => {},
-                    BindingResourceType::TextureViewArray => {},
+                    }
+                    BindingResourceType::BufferArray => {}
+                    BindingResourceType::Sampler => {}
+                    BindingResourceType::SamplerArray => {}
+                    BindingResourceType::TextureView => {}
+                    BindingResourceType::TextureViewArray => {}
                 }
             }
             pipeline.bind_resource(&self.device, group, res)
@@ -179,10 +218,15 @@ impl Context {
     }
 
     pub fn present(&mut self) {
-        let frame = self.surface
+        let frame = self
+            .surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        self.draw(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.draw(
+            frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+        );
         frame.present();
     }
 
@@ -207,11 +251,13 @@ impl Context {
     //private
 
     fn draw(&mut self, view: wgpu::TextureView) {
-        let mut encoder =
-            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             for i in 0..self.meshes.len() {
-                let offset: u64 = (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
+                let offset: u64 =
+                    (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
                 if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
                     let id = buffer_id.to_string();
                     let mesh_data = data;
@@ -224,47 +270,69 @@ impl Context {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {r: 0.1, g: 0.1, b: 0.1, a: 1.0}),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
                         store: true,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { 
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.get_swapchain().depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: false,
                     }),
-                    stencil_ops: None, 
+                    stencil_ops: None,
                 }),
             });
             for pipeline in self.render_pipelines.values() {
                 rpass.set_pipeline(&pipeline.pipeline);
                 if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
-                    if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global) {
+                    if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global)
+                    {
                         rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[0]);
                     }
                     if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
                         rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[0]);
                     }
                     for i in 0..self.meshes.len() {
-                        let offset:wgpu::DynamicOffset= (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as _;
-                        if let Some(per_resource) = pipeline.bind_groups.get(&BindingGroupType::Resource) {
-                            rpass.set_bind_group(BindingGroupType::Resource as u32, &per_resource, &[offset]);
+                        let offset: wgpu::DynamicOffset = (i * self
+                            .get_storage_aligned_buffer_size(GPUMesh::get_size())
+                            as usize)
+                            as _;
+                        if let Some(per_resource) =
+                            pipeline.bind_groups.get(&BindingGroupType::Resource)
+                        {
+                            rpass.set_bind_group(
+                                BindingGroupType::Resource as u32,
+                                &per_resource,
+                                &[offset],
+                            );
                         }
-                        if let Some(per_object) = pipeline.bind_groups.get(&BindingGroupType::PerObject) {
-                            rpass.set_bind_group(BindingGroupType::PerObject as u32, &per_object, &[0]);
+                        if let Some(per_object) =
+                            pipeline.bind_groups.get(&BindingGroupType::PerObject)
+                        {
+                            rpass.set_bind_group(
+                                BindingGroupType::PerObject as u32,
+                                &per_object,
+                                &[0],
+                            );
                         }
-                        rpass.set_index_buffer(self.meshes[i].index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                        rpass.set_index_buffer(
+                            self.meshes[i].index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
                         rpass.set_vertex_buffer(0, self.meshes[i].vertex_buffer.slice(..));
                         rpass.draw_indexed(0..self.meshes[i].indicies.len() as u32, 0, 0..1);
                     }
                 }
-
             }
         }
         self.queue.submit(Some(encoder.finish()));
     }
-    
 }
 pub struct Swapchain {
     config: wgpu::SurfaceConfiguration,
@@ -272,8 +340,13 @@ pub struct Swapchain {
     depth_format: wgpu::TextureFormat,
 }
 
-impl Swapchain{
-    fn new(adapter: &wgpu::Adapter, device: &wgpu::Device, surface: &wgpu::Surface, resolution: (u32, u32)) -> Swapchain {
+impl Swapchain {
+    fn new(
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        surface: &wgpu::Surface,
+        resolution: (u32, u32),
+    ) -> Swapchain {
         //Swapchain
         let swapchain_capabilities = surface.get_capabilities(adapter);
         let swapchain_format = swapchain_capabilities.formats[0];
@@ -288,8 +361,8 @@ impl Swapchain{
             view_formats: vec![],
         };
         let depth_format = wgpu::TextureFormat::Depth32Float;
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor{
-            size: wgpu::Extent3d{
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
                 width: config.width,
                 height: config.height,
                 depth_or_array_layers: 1,
@@ -300,21 +373,25 @@ impl Swapchain{
             format: depth_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: Some("Swapchain depth texture"),
-            view_formats: &[]
+            view_formats: &[],
         });
 
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         surface.configure(&device, &config);
 
-        Swapchain {config: config, depth_view, depth_format}
+        Swapchain {
+            config: config,
+            depth_view,
+            depth_format,
+        }
     }
 
     fn update(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.config.width = width;
         self.config.height = height;
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor{
-            size: wgpu::Extent3d{
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
                 width: width,
                 height: height,
                 depth_or_array_layers: 1,
@@ -325,7 +402,7 @@ impl Swapchain{
             format: self.depth_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: Some("Swapchain depth texture"),
-            view_formats: &[]
+            view_formats: &[],
         });
 
         self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -353,8 +430,9 @@ pub struct Camera {
     pub is_active: bool,
 }
 impl Camera {
-    fn generate_matrix(aspect_ratio: f32, fov:f32, z_near:f32, z_far:f32) -> glam::Mat4 {
-        let projection = glam::Mat4::perspective_rh(fov * consts::PI / 180., aspect_ratio, z_near, z_far);
+    fn generate_matrix(aspect_ratio: f32, fov: f32, z_near: f32, z_far: f32) -> glam::Mat4 {
+        let projection =
+            glam::Mat4::perspective_rh(fov * consts::PI / 180., aspect_ratio, z_near, z_far);
         let view = glam::Mat4::look_at_rh(
             glam::Vec3::new(1.5, -5.0, 3.0),
             glam::Vec3::ZERO,
@@ -363,13 +441,22 @@ impl Camera {
         projection * view
     }
     pub fn new(context: &mut Context, fov: f32) -> Camera {
-        let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
+        let mx_total =
+            Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
-        Camera { fov: fov, is_active: true }
+        Camera {
+            fov: fov,
+            is_active: true,
+        }
     }
 
     pub fn update(&self, context: &Context) {
-        let mx_total = Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), self.fov, 1.0, 100.0);
+        let mx_total = Camera::generate_matrix(
+            context.get_swapchain().get_aspect_ratio(),
+            self.fov,
+            1.0,
+            100.0,
+        );
         let mx_ref: &[f32; 16] = mx_total.as_ref();
         context.write_buffer("camera_buffer", 0, bytemuck::cast_slice(mx_ref));
     }
@@ -386,27 +473,29 @@ pub struct RenderPipelineSettings {
 
 impl Default for RenderPipelineSettings {
     fn default() -> Self {
-        Self { 
-            shader: "", 
-            cull_mode: wgpu::Face::Back, 
-            depth_testing: false, 
-            depth_write_enabled: true, 
-            depth_compare: wgpu::CompareFunction::LessEqual 
+        Self {
+            shader: "",
+            cull_mode: wgpu::Face::Back,
+            depth_testing: false,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
         }
     }
 }
 pub struct RenderPipeline {
     pipeline: wgpu::RenderPipeline,
-    group_layouts: HashMap<u32,wgpu::BindGroupLayout>,
-    bind_groups: HashMap<BindingGroupType,wgpu::BindGroup>
+    group_layouts: HashMap<u32, wgpu::BindGroupLayout>,
+    bind_groups: HashMap<BindingGroupType, wgpu::BindGroup>,
 }
 impl RenderPipeline {
     pub fn new(context: &Context, settings: &RenderPipelineSettings) -> RenderPipeline {
         //Shader and pipeline
-        let module = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { 
-            label: None, 
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(settings.shader)) 
-        });
+        let module = context
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(settings.shader)),
+            });
         let naga_module = naga::front::wgsl::parse_str(settings.shader).unwrap();
         let mut group_layouts: HashMap<u32, wgpu::BindGroupLayout> = HashMap::new();
         let mut entries: HashMap<u32, Vec<wgpu::BindGroupLayoutEntry>> = HashMap::new();
@@ -414,51 +503,50 @@ impl RenderPipeline {
             let handle = &naga_module.global_variables[global_handle.0];
             if let Some(bindings) = &handle.binding {
                 let ty = match naga_module.types[handle.ty].inner {
-                    naga::TypeInner::Struct { .. } => {
-                        wgpu::BindingType::Buffer { 
-                            ty: if handle.space == naga::AddressSpace::Uniform {
-                                wgpu::BufferBindingType::Uniform
-                            } else {
-                                wgpu::BufferBindingType::Storage { read_only: true }
-                            },
-                            has_dynamic_offset: true,
-                            min_binding_size: None,
-                        }
+                    naga::TypeInner::Struct { .. } => wgpu::BindingType::Buffer {
+                        ty: if handle.space == naga::AddressSpace::Uniform {
+                            wgpu::BufferBindingType::Uniform
+                        } else {
+                            wgpu::BufferBindingType::Storage { read_only: true }
+                        },
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
                     },
                     //naga::TypeInner::Image { .. } => quote!(&'a wgpu::TextureView),
-                    naga::TypeInner::Image { .. } => {
-                        wgpu::BindingType::Texture { 
-                            multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        }
-                    }
+                    naga::TypeInner::Image { .. } => wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
                     //naga::TypeInner::Array { .. } => quote!(wgpu::BufferBinding<'a>),
                     _ => panic!("Unsupported type for binding fields."),
                 };
-                let entry = wgpu::BindGroupLayoutEntry{
+                let entry = wgpu::BindGroupLayoutEntry {
                     binding: bindings.binding,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: ty,
-                    count: None
+                    count: None,
                 };
                 if let Some(entries) = entries.get_mut(&bindings.group) {
                     entries.push(entry);
                 } else {
                     let mut temp_vec: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
                     temp_vec.push(entry);
-                    entries.insert(bindings.group,temp_vec);
+                    entries.insert(bindings.group, temp_vec);
                 }
             }
         }
         for (key, value) in entries {
-            let layout = context.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { 
-                label: None,
-                entries: &value,
-            });
+            let layout =
+                context
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: None,
+                        entries: &value,
+                    });
             group_layouts.insert(key, layout);
         }
-        
+
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -475,80 +563,89 @@ impl RenderPipeline {
                 },
             ],
         }];
-        let mut layout_ref:Vec<&wgpu::BindGroupLayout> = Vec::new();
+        let mut layout_ref: Vec<&wgpu::BindGroupLayout> = Vec::new();
         for i in 0..group_layouts.len() as u32 {
             if let Some(layout) = group_layouts.get(&i) {
                 layout_ref.push(layout);
             }
         }
-        let render_pipeline = context.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(
-                &context.device.create_pipeline_layout(
-                    &wgpu::PipelineLayoutDescriptor { 
-                        label: None,
-                        bind_group_layouts: &layout_ref,
-                        push_constant_ranges: &[], 
-                    }
-                )
-            ),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: &naga_module.entry_points[0].name,
-                buffers: &vertex_buffers,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: &naga_module.entry_points[1].name,
-                targets: &[Some(context.get_swapchain().get_format().into())],
-            }),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(settings.cull_mode),
-                ..Default::default()
-            },
-            depth_stencil: if settings.depth_testing {
-                Some(wgpu::DepthStencilState { 
-                    format: context.get_swapchain().depth_format, 
-                    depth_write_enabled: settings.depth_write_enabled, 
-                    depth_compare: settings.depth_compare, 
-                    stencil: wgpu::StencilState::default(), 
-                    bias: wgpu::DepthBiasState::default() 
-                })
-            } else {
-                None
-            },
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
-        RenderPipeline { pipeline: render_pipeline, group_layouts: group_layouts, bind_groups: HashMap::new() }
+        let render_pipeline =
+            context
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&context.device.create_pipeline_layout(
+                        &wgpu::PipelineLayoutDescriptor {
+                            label: None,
+                            bind_group_layouts: &layout_ref,
+                            push_constant_ranges: &[],
+                        },
+                    )),
+                    vertex: wgpu::VertexState {
+                        module: &module,
+                        entry_point: &naga_module.entry_points[0].name,
+                        buffers: &vertex_buffers,
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &module,
+                        entry_point: &naga_module.entry_points[1].name,
+                        targets: &[Some(context.get_swapchain().get_format().into())],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: Some(settings.cull_mode),
+                        ..Default::default()
+                    },
+                    depth_stencil: if settings.depth_testing {
+                        Some(wgpu::DepthStencilState {
+                            format: context.get_swapchain().depth_format,
+                            depth_write_enabled: settings.depth_write_enabled,
+                            depth_compare: settings.depth_compare,
+                            stencil: wgpu::StencilState::default(),
+                            bias: wgpu::DepthBiasState::default(),
+                        })
+                    } else {
+                        None
+                    },
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                });
+        RenderPipeline {
+            pipeline: render_pipeline,
+            group_layouts: group_layouts,
+            bind_groups: HashMap::new(),
+        }
     }
-    pub fn bind_resource(&mut self, device: &wgpu::Device, group: BindingGroupType, resources: Vec<wgpu::BindingResource>) {
+    pub fn bind_resource(
+        &mut self,
+        device: &wgpu::Device,
+        group: BindingGroupType,
+        resources: Vec<wgpu::BindingResource>,
+    ) {
         let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
         for i in 0..resources.len() {
-            let entry = wgpu::BindGroupEntry{
+            let entry = wgpu::BindGroupEntry {
                 binding: i as u32,
-                resource: resources[i].clone(), 
+                resource: resources[i].clone(),
             };
             entries.push(entry);
         }
         let i = group as u32;
         if let Some(layout) = self.group_layouts.get(&i) {
-            self.bind_groups.entry(group).or_insert(device.create_bind_group(
-                &wgpu::BindGroupDescriptor{
+            self.bind_groups
+                .entry(group)
+                .or_insert(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
                     layout: layout,
                     entries: &entries,
-                }
-            ));
+                }));
         }
     }
 }
 
-
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GPUMaterialData {
-    pub color: [f32; 4]
+    pub color: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -559,29 +656,38 @@ pub struct Material {
 
 impl Material {
     pub fn new(context: &mut Context, id: &'static str) -> Material {
+        let material_data = GPUMaterialData {
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        context.create_buffer_init(
+            "material_buffer",
+            bytemuck::bytes_of(&material_data),
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
 
-        let material_data = GPUMaterialData {color: [1.0,1.0,1.0,1.0]};
-        context.create_buffer_init("material_buffer", bytemuck::bytes_of(&material_data), wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST);
-
-        Material { id: id, pipeline_settings: RenderPipelineSettings::default() }
+        Material {
+            id: id,
+            pipeline_settings: RenderPipelineSettings::default(),
+        }
     }
     pub fn set_color(&self, context: &Context, color: [f32; 4]) {
-        let material_data = GPUMaterialData {color};
+        let material_data = GPUMaterialData { color };
         context.write_buffer("material_buffer", 0, bytemuck::bytes_of(&material_data));
     }
-
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GPUMesh {
-    pub model_mx: [f32; 16]
+    pub model_mx: [f32; 16],
 }
 
 impl GPUMesh {
     pub fn new() -> GPUMesh {
         let model_mx = glam::Mat4::IDENTITY;
-        GPUMesh { model_mx: model_mx.as_ref().clone() }
+        GPUMesh {
+            model_mx: model_mx.as_ref().clone(),
+        }
     }
     pub fn get_size() -> u64 {
         return mem::size_of::<Self>() as u64;
@@ -592,11 +698,14 @@ impl GPUMesh {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Vertex {
     pos: [f32; 4],
-    tex_coord: [f32; 2]
+    tex_coord: [f32; 2],
 }
 
 fn vertex(pos: [i8; 3], tex_coords: [i8; 2]) -> Vertex {
-    Vertex { pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32, 1.0], tex_coord: [tex_coords[0] as f32, tex_coords[1] as f32] }
+    Vertex {
+        pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32, 1.0],
+        tex_coord: [tex_coords[0] as f32, tex_coords[1] as f32],
+    }
 }
 
 fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
@@ -649,12 +758,17 @@ pub struct Transform {
     translation: glam::Vec3,
     rotation: glam::Vec3,
     scale: glam::Vec3,
-    values_changed: bool
+    values_changed: bool,
 }
 
 impl Transform {
     pub fn new() -> Transform {
-        Transform { translation: glam::Vec3::ZERO, rotation: glam::Vec3::ZERO, scale: glam::Vec3::ONE, values_changed: true }
+        Transform {
+            translation: glam::Vec3::ZERO,
+            rotation: glam::Vec3::ZERO,
+            scale: glam::Vec3::ONE,
+            values_changed: true,
+        }
     }
     pub fn get_translation(&self) -> &glam::Vec3 {
         return &self.translation;
@@ -684,7 +798,12 @@ impl Transform {
         self.values_changed = input;
     }
     pub fn generate_transform_matrix(&self) -> glam::Mat4 {
-        let rot_quat = glam::Quat::from_euler(glam::EulerRot::XYZ, self.rotation.x.to_radians(), self.rotation.y.to_radians(), self.rotation.z.to_radians());
+        let rot_quat = glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            self.rotation.x.to_radians(),
+            self.rotation.y.to_radians(),
+            self.rotation.z.to_radians(),
+        );
         return glam::Mat4::from_scale_rotation_translation(self.scale, rot_quat, self.translation);
     }
 }
@@ -700,36 +819,47 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(context: &mut Context, id:&str, material: Material) -> Mesh{
+    pub fn new(context: &mut Context, id: &str, material: Material) -> Mesh {
         let (verticies, indicies) = create_vertices();
 
-        let vertex_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&verticies),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-    
-        let index_buffer = context.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&indicies),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let vertex_buffer = context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&verticies),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        let index_buffer = context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&indicies),
+                usage: wgpu::BufferUsages::INDEX,
+            });
         let transform = Transform::new();
         // TODO: this shouldn't be here. There should be one large buffer that handles all of the meshes
         // Move vertex, index and mesh buffer for Context to handle
-        
 
-        Mesh { id: id.to_string(), vertex_buffer, index_buffer, indicies, verticies, material, transform }
+        Mesh {
+            id: id.to_string(),
+            vertex_buffer,
+            index_buffer,
+            indicies,
+            verticies,
+            material,
+            transform,
+        }
     }
-    pub fn update_model_mx(&mut self) -> Option<(&str, GPUMesh)>{
+    pub fn update_model_mx(&mut self) -> Option<(&str, GPUMesh)> {
         if self.transform.get_values_changed() {
             let model_ref = self.transform.generate_transform_matrix();
-            let mesh_data = GPUMesh{model_mx: model_ref.as_ref().clone()};
+            let mesh_data = GPUMesh {
+                model_mx: model_ref.as_ref().clone(),
+            };
             self.transform.set_values_changed(true);
             return Some(("mesh_buffer", mesh_data));
         }
         return None;
-
     }
 }
-
