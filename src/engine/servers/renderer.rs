@@ -1,8 +1,11 @@
+use log::warn;
 use naga;
 use std::{borrow::Cow, collections::HashMap, f32::consts, mem};
 
 use wgpu::util::DeviceExt;
 use winit::window::Window;
+
+pub mod resources;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
 pub enum BindingGroupType {
@@ -43,7 +46,7 @@ impl Default for BindingResource {
 }
 
 #[allow(dead_code)]
-pub struct Context {
+pub struct RendererServer {
     instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
@@ -51,14 +54,11 @@ pub struct Context {
     //swapchain
     swapchain: Swapchain,
     pub surface: wgpu::Surface,
-    render_pipelines: HashMap<RenderPipelineSettings, RenderPipeline>,
-    meshes: Vec<Mesh>,
-    buffers: HashMap<String, wgpu::Buffer>,
 }
 
 use bytemuck::{Pod, Zeroable};
-impl Context {
-    pub async fn new(window: &Window) -> Context {
+impl RendererServer {
+    pub async fn new(window: &Window) -> RendererServer {
         //Instance and device init
         let instance = wgpu::Instance::default();
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
@@ -83,22 +83,16 @@ impl Context {
             )
             .await
             .expect("Failed to create device");
-        let swapchain = Swapchain::new(
-            &adapter,
-            &device,
-            &surface,
-            (window.inner_size().width, window.inner_size().height),
-        );
-        Context {
+        let swapchain = Swapchain::new()
+            .new_resolution((window.inner_size().width, window.inner_size().height))
+            .build(&adapter, &device, &surface);
+        RendererServer {
             instance,
             adapter,
             device,
             queue,
             surface,
             swapchain,
-            render_pipelines: HashMap::new(),
-            meshes: Vec::new(),
-            buffers: HashMap::new(),
         }
     }
 
@@ -107,127 +101,54 @@ impl Context {
     }
 
     pub fn update_swapchain(&mut self, resolution: (u32, u32)) {
-        self.swapchain
-            .update(&self.device, resolution.0, resolution.1);
-        self.surface.configure(&self.device, &self.swapchain.config);
+        Swapchain::new().new_resolution(resolution);
     }
 
-    pub fn add_render_pipeline(&mut self, id: &RenderPipelineSettings) {
-        if self.render_pipelines.get(&id).is_none() {
-            let pipeline = RenderPipeline::new(self, id);
-            self.render_pipelines.insert(id.clone(), pipeline);
-        }
-    }
+    // pub fn bind_resources_to_pipeline(
+    //     &mut self,
+    //     id: &RenderPipelineSettings,
+    //     group: BindingGroupType,
+    //     resources: &[BindingResource],
+    // ) {
+    //     if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
+    //         let mut res: Vec<wgpu::BindingResource<'_>> = Vec::new();
+    //         for resource in resources {
+    //             match resource.resource_type {
+    //                 BindingResourceType::Buffer => {
+    //                     if let Some(buffer) = self.buffers.get(&resource.id.to_string()) {
+    //                         if resource.entire_binding {
+    //                             res.push(buffer.as_entire_binding());
+    //                         } else {
+    //                             res.push(wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+    //                                 buffer: &buffer,
+    //                                 offset: resource.offset,
+    //                                 size: wgpu::BufferSize::new(resource.size),
+    //                             }));
+    //                         }
+    //                     } else {
+    //                         println!("buffer by id {} not found", resource.id)
+    //                     }
+    //                 }
+    //                 BindingResourceType::BufferArray => {}
+    //                 BindingResourceType::Sampler => {}
+    //                 BindingResourceType::SamplerArray => {}
+    //                 BindingResourceType::TextureView => {}
+    //                 BindingResourceType::TextureViewArray => {}
+    //             }
+    //         }
+    //         pipeline.bind_resource(&self.device, group, res)
+    //     }
+    // }
 
-    pub fn create_mesh(&mut self, id: &str, material: Material) {
-        let mesh = Mesh::new(self, id, material);
-        self.meshes.push(mesh);
-    }
-
-    pub fn get_mesh(&self, id: &str) -> Option<&Mesh> {
-        if let Some(mesh) = self.meshes.iter().find(|&m| m.id == id) {
-            return Some(mesh);
-        }
-        return None;
-    }
-
-    pub fn get_mesh_mut(&mut self, id: &str) -> Option<&mut Mesh> {
-        if let Some(mesh) = self.meshes.iter_mut().find(|m| m.id == id) {
-            return Some(mesh);
-        }
-        return None;
-    }
-
-    pub fn create_buffer(
-        &mut self,
-        id: &str,
-        size: u64,
-        usage: wgpu::BufferUsages,
-        mapped_at_creation: Option<bool>,
-    ) {
-        if self.buffers.get(id).is_none() {
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(id),
-                size: size,
-                usage: usage,
-                mapped_at_creation: if let Some(state) = mapped_at_creation {
-                    state
-                } else {
-                    false
-                },
-            });
-            self.buffers.insert(id.to_string(), buffer);
-        }
-    }
-
-    pub fn create_buffer_init(&mut self, id: &str, contents: &[u8], usage: wgpu::BufferUsages) {
-        if self.buffers.get(id).is_none() {
-            let buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(id),
-                    contents: contents,
-                    usage: usage,
-                });
-            self.buffers.insert(id.to_string(), buffer);
-        }
-    }
-
-    pub fn write_buffer(&self, id: &str, offset: wgpu::BufferAddress, data: &[u8]) {
-        if let Some(buffer) = self.buffers.get(id) {
-            self.queue.write_buffer(buffer, offset, data);
-        } else {
-            println!("Couldn't write to a buffer with id: {}. Id not found", id)
-        }
-    }
-
-    pub fn bind_resources_to_pipeline(
-        &mut self,
-        id: &RenderPipelineSettings,
-        group: BindingGroupType,
-        resources: &[BindingResource],
-    ) {
-        if let Some(pipeline) = self.render_pipelines.get_mut(&id) {
-            let mut res: Vec<wgpu::BindingResource<'_>> = Vec::new();
-            for resource in resources {
-                match resource.resource_type {
-                    BindingResourceType::Buffer => {
-                        if let Some(buffer) = self.buffers.get(&resource.id.to_string()) {
-                            if resource.entire_binding {
-                                res.push(buffer.as_entire_binding());
-                            } else {
-                                res.push(wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &buffer,
-                                    offset: resource.offset,
-                                    size: wgpu::BufferSize::new(resource.size),
-                                }));
-                            }
-                        } else {
-                            println!("buffer by id {} not found", resource.id)
-                        }
-                    }
-                    BindingResourceType::BufferArray => {}
-                    BindingResourceType::Sampler => {}
-                    BindingResourceType::SamplerArray => {}
-                    BindingResourceType::TextureView => {}
-                    BindingResourceType::TextureViewArray => {}
-                }
-            }
-            pipeline.bind_resource(&self.device, group, res)
-        }
-    }
-
-    pub fn present(&mut self) {
+    pub fn get_new_frame(&self) -> (wgpu::SurfaceTexture, wgpu::TextureView, &wgpu::TextureView) {
         let frame = self
             .surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        self.draw(
-            frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default()),
-        );
-        frame.present();
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        (frame, frame_view, &self.get_swapchain().depth_view)
     }
 
     pub fn get_uniform_aligned_buffer_size(&self, value: wgpu::BufferAddress) -> u64 {
@@ -250,112 +171,118 @@ impl Context {
 
     //private
 
-    fn draw(&mut self, view: wgpu::TextureView) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            for i in 0..self.meshes.len() {
-                let offset: u64 =
-                    (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
-                if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
-                    let id = buffer_id.to_string();
-                    let mesh_data = data;
-                    self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
-                }
-            }
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: true,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.get_swapchain().depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: false,
-                    }),
-                    stencil_ops: None,
-                }),
-            });
-            for pipeline in self.render_pipelines.values() {
-                rpass.set_pipeline(&pipeline.pipeline);
-                if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
-                    if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global)
-                    {
-                        rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[0]);
-                    }
-                    if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
-                        rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[0]);
-                    }
-                    for i in 0..self.meshes.len() {
-                        let offset: wgpu::DynamicOffset = (i * self
-                            .get_storage_aligned_buffer_size(GPUMesh::get_size())
-                            as usize)
-                            as _;
-                        if let Some(per_resource) =
-                            pipeline.bind_groups.get(&BindingGroupType::Resource)
-                        {
-                            rpass.set_bind_group(
-                                BindingGroupType::Resource as u32,
-                                &per_resource,
-                                &[offset],
-                            );
-                        }
-                        if let Some(per_object) =
-                            pipeline.bind_groups.get(&BindingGroupType::PerObject)
-                        {
-                            rpass.set_bind_group(
-                                BindingGroupType::PerObject as u32,
-                                &per_object,
-                                &[0],
-                            );
-                        }
-                        rpass.set_index_buffer(
-                            self.meshes[i].index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        rpass.set_vertex_buffer(0, self.meshes[i].vertex_buffer.slice(..));
-                        rpass.draw_indexed(0..self.meshes[i].indicies.len() as u32, 0, 0..1);
-                    }
-                }
-            }
-        }
-        self.queue.submit(Some(encoder.finish()));
-    }
-}
-pub struct Swapchain {
-    config: wgpu::SurfaceConfiguration,
-    depth_view: wgpu::TextureView,
-    depth_format: wgpu::TextureFormat,
+    // fn draw(&mut self, view: wgpu::TextureView) {
+    //     let mut encoder = self
+    //         .device
+    //         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    //     {
+    //         for i in 0..self.meshes.len() {
+    //             let offset: u64 =
+    //                 (i * self.get_storage_aligned_buffer_size(GPUMesh::get_size()) as usize) as u64;
+    //             if let Some((buffer_id, data)) = self.meshes[i].update_model_mx() {
+    //                 let id = buffer_id.to_string();
+    //                 let mesh_data = data;
+    //                 self.write_buffer(&id, offset.into(), bytemuck::bytes_of(&mesh_data));
+    //             }
+    //         }
+    //         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    //             label: None,
+    //             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+    //                 view: &view,
+    //                 resolve_target: None,
+    //                 ops: wgpu::Operations {
+    //                     load: wgpu::LoadOp::Clear(wgpu::Color {
+    //                         r: 0.1,
+    //                         g: 0.1,
+    //                         b: 0.1,
+    //                         a: 1.0,
+    //                     }),
+    //                     store: true,
+    //                 },
+    //             })],
+    //             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+    //                 view: &self.get_swapchain().depth_view,
+    //                 depth_ops: Some(wgpu::Operations {
+    //                     load: wgpu::LoadOp::Clear(1.0),
+    //                     store: false,
+    //                 }),
+    //                 stencil_ops: None,
+    //             }),
+    //         });
+    //         for pipeline in self.render_pipelines.values() {
+    //             rpass.set_pipeline(&pipeline.pipeline);
+    //             if pipeline.group_layouts.len() == pipeline.bind_groups.len() {
+    //                 if let Some(global_group) = pipeline.bind_groups.get(&BindingGroupType::Global)
+    //                 {
+    //                     rpass.set_bind_group(BindingGroupType::Global as u32, &global_group, &[0]);
+    //                 }
+    //                 if let Some(per_frame) = pipeline.bind_groups.get(&BindingGroupType::PerFrame) {
+    //                     rpass.set_bind_group(BindingGroupType::PerFrame as u32, &per_frame, &[0]);
+    //                 }
+    //                 for i in 0..self.meshes.len() {
+    //                     let offset: wgpu::DynamicOffset = (i * self
+    //                         .get_storage_aligned_buffer_size(GPUMesh::get_size())
+    //                         as usize)
+    //                         as _;
+    //                     if let Some(per_resource) =
+    //                         pipeline.bind_groups.get(&BindingGroupType::Resource)
+    //                     {
+    //                         rpass.set_bind_group(
+    //                             BindingGroupType::Resource as u32,
+    //                             &per_resource,
+    //                             &[offset],
+    //                         );
+    //                     }
+    //                     if let Some(per_object) =
+    //                         pipeline.bind_groups.get(&BindingGroupType::PerObject)
+    //                     {
+    //                         rpass.set_bind_group(
+    //                             BindingGroupType::PerObject as u32,
+    //                             &per_object,
+    //                             &[0],
+    //                         );
+    //                     }
+    //                     rpass.set_index_buffer(
+    //                         self.meshes[i].index_buffer.slice(..),
+    //                         wgpu::IndexFormat::Uint16,
+    //                     );
+    //                     rpass.set_vertex_buffer(0, self.meshes[i].vertex_buffer.slice(..));
+    //                     rpass.draw_indexed(0..self.meshes[i].indicies.len() as u32, 0, 0..1);
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     self.queue.submit(Some(encoder.finish()));
+    // }
 }
 
-impl Swapchain {
-    fn new(
+struct SwapchainBuilder {
+    resolution: (u32, u32),
+    present_mode: wgpu::PresentMode,
+}
+
+impl SwapchainBuilder {
+    fn new_resolution(&mut self, resolution: (u32, u32)) -> &mut Self {
+        self.resolution = resolution;
+        self
+    }
+    fn new_present_mode(&mut self, mode: wgpu::PresentMode) -> &mut Self {
+        self.present_mode = mode;
+        self
+    }
+    fn build(
+        &mut self,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         surface: &wgpu::Surface,
-        resolution: (u32, u32),
     ) -> Swapchain {
-        //Swapchain
         let swapchain_capabilities = surface.get_capabilities(adapter);
         let swapchain_format = swapchain_capabilities.formats[0];
-
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
-            width: resolution.0,
-            height: resolution.1,
+            width: self.resolution.0,
+            height: self.resolution.1,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: swapchain_capabilities.alpha_modes[0],
             view_formats: vec![],
@@ -379,35 +306,26 @@ impl Swapchain {
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         surface.configure(&device, &config);
-
         Swapchain {
             config: config,
-            depth_view,
-            depth_format,
+            depth_view: depth_view,
+            depth_format: depth_format,
         }
     }
+}
+pub struct Swapchain {
+    config: wgpu::SurfaceConfiguration,
+    depth_view: wgpu::TextureView,
+    depth_format: wgpu::TextureFormat,
+}
 
-    fn update(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.config.width = width;
-        self.config.height = height;
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: width,
-                height: height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.depth_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: Some("Swapchain depth texture"),
-            view_formats: &[],
-        });
-
-        self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+impl Swapchain {
+    fn new() -> SwapchainBuilder {
+        SwapchainBuilder {
+            resolution: (0, 0),
+            present_mode: wgpu::PresentMode::Fifo,
+        }
     }
-
     pub fn get_resolution(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
@@ -422,43 +340,6 @@ impl Swapchain {
 
     pub fn get_depth_format(&self) -> wgpu::TextureFormat {
         self.depth_format
-    }
-}
-
-pub struct Camera {
-    pub fov: f32,
-    pub is_active: bool,
-}
-impl Camera {
-    fn generate_matrix(aspect_ratio: f32, fov: f32, z_near: f32, z_far: f32) -> glam::Mat4 {
-        let projection =
-            glam::Mat4::perspective_rh(fov * consts::PI / 180., aspect_ratio, z_near, z_far);
-        let view = glam::Mat4::look_at_rh(
-            glam::Vec3::new(1.5, -5.0, 3.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Z,
-        );
-        projection * view
-    }
-    pub fn new(context: &mut Context, fov: f32) -> Camera {
-        let mx_total =
-            Camera::generate_matrix(context.get_swapchain().get_aspect_ratio(), fov, 1.0, 100.0);
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        Camera {
-            fov: fov,
-            is_active: true,
-        }
-    }
-
-    pub fn update(&self, context: &Context) {
-        let mx_total = Camera::generate_matrix(
-            context.get_swapchain().get_aspect_ratio(),
-            self.fov,
-            1.0,
-            100.0,
-        );
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        context.write_buffer("camera_buffer", 0, bytemuck::cast_slice(mx_ref));
     }
 }
 
@@ -488,7 +369,7 @@ pub struct RenderPipeline {
     bind_groups: HashMap<BindingGroupType, wgpu::BindGroup>,
 }
 impl RenderPipeline {
-    pub fn new(context: &Context, settings: &RenderPipelineSettings) -> RenderPipeline {
+    pub fn new(context: &RendererServer, settings: &RenderPipelineSettings) -> RenderPipeline {
         //Shader and pipeline
         let module = context
             .device
@@ -597,7 +478,7 @@ impl RenderPipeline {
                     },
                     depth_stencil: if settings.depth_testing {
                         Some(wgpu::DepthStencilState {
-                            format: context.get_swapchain().depth_format,
+                            format: wgpu::TextureFormat::Depth32Float,
                             depth_write_enabled: settings.depth_write_enabled,
                             depth_compare: settings.depth_compare,
                             stencil: wgpu::StencilState::default(),
@@ -639,40 +520,6 @@ impl RenderPipeline {
                     entries: &entries,
                 }));
         }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub struct GPUMaterialData {
-    pub color: [f32; 4],
-}
-
-#[derive(Clone, Copy)]
-pub struct Material {
-    id: &'static str,
-    pub pipeline_settings: RenderPipelineSettings,
-}
-
-impl Material {
-    pub fn new(context: &mut Context, id: &'static str) -> Material {
-        let material_data = GPUMaterialData {
-            color: [1.0, 1.0, 1.0, 1.0],
-        };
-        context.create_buffer_init(
-            "material_buffer",
-            bytemuck::bytes_of(&material_data),
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-
-        Material {
-            id: id,
-            pipeline_settings: RenderPipelineSettings::default(),
-        }
-    }
-    pub fn set_color(&self, context: &Context, color: [f32; 4]) {
-        let material_data = GPUMaterialData { color };
-        context.write_buffer("material_buffer", 0, bytemuck::bytes_of(&material_data));
     }
 }
 
@@ -805,61 +652,5 @@ impl Transform {
             self.rotation.z.to_radians(),
         );
         return glam::Mat4::from_scale_rotation_translation(self.scale, rot_quat, self.translation);
-    }
-}
-
-pub struct Mesh {
-    id: String,
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
-    pub indicies: Vec<u16>,
-    pub verticies: Vec<Vertex>,
-    pub material: Material,
-    pub transform: Transform,
-}
-
-impl Mesh {
-    pub fn new(context: &mut Context, id: &str, material: Material) -> Mesh {
-        let (verticies, indicies) = create_vertices();
-
-        let vertex_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&verticies),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        let index_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&indicies),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-        let transform = Transform::new();
-        // TODO: this shouldn't be here. There should be one large buffer that handles all of the meshes
-        // Move vertex, index and mesh buffer for Context to handle
-
-        Mesh {
-            id: id.to_string(),
-            vertex_buffer,
-            index_buffer,
-            indicies,
-            verticies,
-            material,
-            transform,
-        }
-    }
-    pub fn update_model_mx(&mut self) -> Option<(&str, GPUMesh)> {
-        if self.transform.get_values_changed() {
-            let model_ref = self.transform.generate_transform_matrix();
-            let mesh_data = GPUMesh {
-                model_mx: model_ref.as_ref().clone(),
-            };
-            self.transform.set_values_changed(true);
-            return Some(("mesh_buffer", mesh_data));
-        }
-        return None;
     }
 }
