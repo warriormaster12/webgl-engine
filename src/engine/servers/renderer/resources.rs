@@ -90,6 +90,10 @@ impl Buffer {
     pub fn write(&mut self, queue: wgpu::Queue, offset: wgpu::BufferAddress, data: &[u8]) {
         queue.write_buffer(&self.buffer, offset, data);
     }
+
+    pub fn get_native_buffer(&self) -> &wgpu::Buffer {
+        &self.buffer
+    }
 }
 
 pub struct RenderPassBuilder<'a> {
@@ -164,6 +168,13 @@ pub struct VertexBufferLayout {
 }
 
 impl VertexBufferLayout {
+    pub fn new() -> VertexBufferLayout {
+        VertexBufferLayout {
+            array_stride: 0,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: Vec::new(),
+        }
+    }
     pub fn new_array_stride(&mut self, array_stride: u64) -> &mut Self {
         self.array_stride = array_stride;
         self
@@ -178,7 +189,7 @@ impl VertexBufferLayout {
         self.attributes.push(attribute);
         self
     }
-    pub fn build(self) -> Self {
+    pub fn build(&self) -> &Self {
         self
     }
 }
@@ -335,7 +346,7 @@ impl RenderPipeline {
         &mut self,
         device: &wgpu::Device,
         group: u8,
-        resources: Vec<wgpu::BindingResource>,
+        resources: &[wgpu::BindingResource],
     ) {
         let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
         for i in 0..resources.len() {
@@ -356,7 +367,18 @@ impl RenderPipeline {
                 }));
         }
     }
-    pub fn get_native_pipeline(&mut self) -> &mut wgpu::RenderPipeline {
-        &mut self.pipeline
+    pub fn get_native_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+    pub fn get_bind_groups(&self) -> Vec<&wgpu::BindGroup> {
+        let mut bind_groups: Vec<&wgpu::BindGroup> = Vec::new();
+        for i in 0..self.bind_groups.len() {
+            let idx = i as u8;
+            let mut bind_group = self.bind_groups.get(&idx);
+            if let Some(group) = bind_group.as_mut() {
+                bind_groups.push(group);
+            }
+        }
+        bind_groups
     }
 }

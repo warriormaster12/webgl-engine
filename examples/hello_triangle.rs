@@ -12,7 +12,7 @@ fn main() {
         {
             let renderer_server = eng.get_renderer_server();
             let pipeline = RenderPipeline::new()
-                .new_shader(include_str!("hello_triangle.wgsl"))
+                .new_shader(include_str!("shaders/hello_triangle.wgsl"))
                 .new_target(renderer_server.get_swapchain().get_format().into())
                 .build("triangle pipeline", &renderer_server.device);
             triangle_pipeline = Some(pipeline);
