@@ -81,21 +81,25 @@ fn main() {
     {
         env_logger::init();
         let mut eng = pollster::block_on(Engine::new("hello cube", (1280, 720)));
-        let mut triangle_pipeline: Option<RenderPipeline>;
-        let vertex_buffer: Option<Buffer>;
-        let index_buffer: Option<Buffer>;
+        let mut triangle_pipeline: RenderPipeline;
+        let vertex_buffer: Buffer;
+        let index_buffer: Buffer;
+        let mut uniform_buffer: Buffer;
         let index_count: u32;
         {
+            let res: (u32, u32);
+            {
+                res = eng.get_resolution();
+            }
             let renderer_server = eng.get_renderer_server();
-
-            let mx_total = generate_matrix(1280 as f32 / 720 as f32);
+            let mx_total = generate_matrix(res.0 as f32 / res.1 as f32);
             let mx_ref: &[f32; 16] = mx_total.as_ref();
-            let uniform_buffer = Buffer::new("uniform buffer")
+            uniform_buffer = Buffer::new("uniform buffer")
                 .new_content(bytemuck::cast_slice(mx_ref))
-                .new_usage(wgpu::BufferUsages::UNIFORM)
+                .new_usage(wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST)
                 .build(&renderer_server.device);
 
-            let mut pipeline = RenderPipeline::new()
+            triangle_pipeline = RenderPipeline::new()
                 .new_shader(include_str!("shaders/hello_cube.wgsl"))
                 .new_vertex_buffer(
                     &VertexBufferLayout::new()
@@ -110,57 +114,57 @@ fn main() {
                 )
                 .new_target(renderer_server.get_swapchain().get_format().into())
                 .build("triangle pipeline", &renderer_server.device);
-            pipeline.bind_resource(
+            triangle_pipeline.bind_resource(
                 &renderer_server.device,
                 0,
                 &[uniform_buffer.get_native_buffer().as_entire_binding()],
             );
-            triangle_pipeline = Some(pipeline);
 
             //create vertex & index buffer
             let (vertex_data, index_data) = create_vertices();
             index_count = index_data.len() as u32;
-            vertex_buffer = Some(
-                Buffer::new("vertex buffer")
-                    .new_content(bytemuck::cast_slice(&vertex_data))
-                    .new_usage(wgpu::BufferUsages::VERTEX)
-                    .build(&renderer_server.device),
-            );
-            index_buffer = Some(
-                Buffer::new("index buffer")
-                    .new_content(bytemuck::cast_slice(&index_data))
-                    .new_usage(wgpu::BufferUsages::INDEX)
-                    .build(&renderer_server.device),
-            );
+            vertex_buffer = Buffer::new("vertex buffer")
+                .new_content(bytemuck::cast_slice(&vertex_data))
+                .new_usage(wgpu::BufferUsages::VERTEX)
+                .build(&renderer_server.device);
+            index_buffer = Buffer::new("index buffer")
+                .new_content(bytemuck::cast_slice(&index_data))
+                .new_usage(wgpu::BufferUsages::INDEX)
+                .build(&renderer_server.device);
         }
-        eng.app_loop(Box::new(move |engine| {
-            let renderer_server = engine.get_renderer_server();
-            let (frame, frame_view, _depth_view) = renderer_server.get_new_frame();
-            let mut main_buffer =
-                CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
-            {
-                let mut main_pass = RenderPassBuilder::new("main_pass")
-                    .color_attachment(&frame_view, [0.1, 0.5, 0.3, 1.0])
-                    .build(&mut main_buffer);
-                if let Some(pipeline) = triangle_pipeline.as_mut() {
-                    main_pass.set_pipeline(pipeline.get_native_pipeline());
-                    if let (Some(vertex_buffer), Some(index_buffer)) =
-                        (vertex_buffer.as_ref(), index_buffer.as_ref())
-                    {
-                        let bind_groups = pipeline.get_bind_groups();
-                        main_pass.set_bind_group(0, bind_groups[0], &[0]);
-                        main_pass.set_vertex_buffer(0, vertex_buffer.get_native_buffer().slice(..));
-                        main_pass.set_index_buffer(
-                            index_buffer.get_native_buffer().slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        main_pass.draw_indexed(0..index_count, 0, 0..1);
-                    }
+        eng.app_loop(
+            Box::new(move |engine| {
+                let renderer_server = engine.get_renderer_server();
+                let (frame, frame_view, _depth_view) = renderer_server.get_new_frame();
+                let mut main_buffer =
+                    CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
+                {
+                    let mut main_pass = RenderPassBuilder::new("main_pass")
+                        .color_attachment(&frame_view, [0.1, 0.5, 0.3, 1.0])
+                        .build(&mut main_buffer);
+                    main_pass.set_pipeline(triangle_pipeline.get_native_pipeline());
+                    let bind_groups = triangle_pipeline.get_bind_groups();
+                    main_pass.set_bind_group(0, bind_groups[0], &[0]);
+                    main_pass.set_vertex_buffer(0, vertex_buffer.get_native_buffer().slice(..));
+                    main_pass.set_index_buffer(
+                        index_buffer.get_native_buffer().slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    main_pass.draw_indexed(0..index_count, 0, 0..1);
                 }
-            }
-            main_buffer.finish_command_buffer(&renderer_server.queue);
-            frame.present();
-        }));
+                main_buffer.finish_command_buffer(&renderer_server.queue);
+                frame.present();
+            }),
+            Box::new(move |engine, resolution| {
+                let mx_total = generate_matrix(resolution.0 as f32 / resolution.1 as f32);
+                let mx_ref: &[f32; 16] = mx_total.as_ref();
+                uniform_buffer.write(
+                    &engine.get_renderer_server().queue,
+                    0,
+                    bytemuck::cast_slice(mx_ref),
+                );
+            }),
+        );
     }
     #[cfg(target_arch = "wasm32")]
     {

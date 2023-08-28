@@ -1,7 +1,5 @@
 pub mod servers;
 use servers::renderer;
-use servers::renderer::resources::{CommandBuffer, RenderPassBuilder};
-use winit::window;
 use winit::{
     dpi::PhysicalSize,
     event::{Event, WindowEvent},
@@ -18,7 +16,7 @@ pub struct Engine {
 impl Engine {
     pub async fn new(name: &str, resolution: (u32, u32)) -> Engine {
         let event_loop = EventLoop::new();
-        let window = winit::window::Window::new(&event_loop).unwrap();
+        let window = Window::new(&event_loop).unwrap();
         window.set_title(&name);
         window.set_inner_size(PhysicalSize::new(resolution.0, resolution.1));
         let renderer_server = renderer::RendererServer::new(&window).await;
@@ -33,7 +31,18 @@ impl Engine {
         &mut self.renderer_server
     }
 
-    pub fn app_loop(mut self, mut update: Box<dyn FnMut(&mut Self)>) {
+    pub fn get_resolution(&self) -> (u32, u32) {
+        (
+            self.window.inner_size().width,
+            self.window.inner_size().height,
+        )
+    }
+
+    pub fn app_loop(
+        mut self,
+        mut update: Box<dyn FnMut(&mut Self)>,
+        mut resize: Box<dyn FnMut(&mut Self, (u32, u32))>,
+    ) {
         let event_loop = self.event_loop.take().unwrap();
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
@@ -45,6 +54,7 @@ impl Engine {
                     // Reconfigure the surface with the new size
                     // On macos the window needs to be redrawn manually after resizing
                     self.resize((size.width, size.height));
+                    resize(&mut self, (size.width, size.height));
                     self.window.request_redraw();
                 }
                 Event::RedrawRequested(_) => {

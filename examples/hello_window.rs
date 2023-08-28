@@ -6,19 +6,22 @@ fn main() {
     {
         env_logger::init();
         let eng = pollster::block_on(Engine::new("hello window", (1280, 720)));
-        eng.app_loop(Box::new(move |engine| {
-            let renderer_server = engine.get_renderer_server();
-            let (frame, frame_view, depth_view) = renderer_server.get_new_frame();
-            let mut main_buffer =
-                CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
-            RenderPassBuilder::new("main_pass")
-                .color_attachment(&frame_view, [0.1, 0.1, 0.3, 1.0])
-                .depth_stencil_attachment(depth_view)
-                .depth_ops(1.0)
-                .build(&mut main_buffer);
-            main_buffer.finish_command_buffer(&renderer_server.queue);
-            frame.present();
-        }));
+        eng.app_loop(
+            Box::new(move |engine| {
+                let renderer_server = engine.get_renderer_server();
+                let (frame, frame_view, depth_view) = renderer_server.get_new_frame();
+                let mut main_buffer =
+                    CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
+                RenderPassBuilder::new("main_pass")
+                    .color_attachment(&frame_view, [0.1, 0.1, 0.3, 1.0])
+                    .depth_stencil_attachment(depth_view)
+                    .depth_ops(1.0)
+                    .build(&mut main_buffer);
+                main_buffer.finish_command_buffer(&renderer_server.queue);
+                frame.present();
+            }),
+            Box::new(move |_engine, _resolution| {}),
+        );
     }
     #[cfg(target_arch = "wasm32")]
     {

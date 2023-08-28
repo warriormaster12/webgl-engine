@@ -8,32 +8,32 @@ fn main() {
     {
         env_logger::init();
         let mut eng = pollster::block_on(Engine::new("hello triangle", (1280, 720)));
-        let mut triangle_pipeline: Option<RenderPipeline>;
+        let triangle_pipeline: RenderPipeline;
         {
             let renderer_server = eng.get_renderer_server();
-            let pipeline = RenderPipeline::new()
+            triangle_pipeline = RenderPipeline::new()
                 .new_shader(include_str!("shaders/hello_triangle.wgsl"))
                 .new_target(renderer_server.get_swapchain().get_format().into())
                 .build("triangle pipeline", &renderer_server.device);
-            triangle_pipeline = Some(pipeline);
         }
-        eng.app_loop(Box::new(move |engine| {
-            let renderer_server = engine.get_renderer_server();
-            let (frame, frame_view, _depth_view) = renderer_server.get_new_frame();
-            let mut main_buffer =
-                CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
-            {
-                let mut main_pass = RenderPassBuilder::new("main_pass")
-                    .color_attachment(&frame_view, [0.1, 0.5, 0.3, 1.0])
-                    .build(&mut main_buffer);
-                if let Some(pipeline) = triangle_pipeline.as_mut() {
-                    main_pass.set_pipeline(pipeline.get_native_pipeline());
+        eng.app_loop(
+            Box::new(move |engine| {
+                let renderer_server = engine.get_renderer_server();
+                let (frame, frame_view, _depth_view) = renderer_server.get_new_frame();
+                let mut main_buffer =
+                    CommandBuffer::new_command_buffer(&renderer_server.device, "main_buffer");
+                {
+                    let mut main_pass = RenderPassBuilder::new("main_pass")
+                        .color_attachment(&frame_view, [0.1, 0.5, 0.3, 1.0])
+                        .build(&mut main_buffer);
+                    main_pass.set_pipeline(triangle_pipeline.get_native_pipeline());
                     main_pass.draw(0..3, 0..1);
                 }
-            }
-            main_buffer.finish_command_buffer(&renderer_server.queue);
-            frame.present();
-        }));
+                main_buffer.finish_command_buffer(&renderer_server.queue);
+                frame.present();
+            }),
+            Box::new(move |_engine, _resolution| {}),
+        );
     }
     #[cfg(target_arch = "wasm32")]
     {

@@ -87,7 +87,7 @@ impl Buffer {
         }
     }
 
-    pub fn write(&mut self, queue: wgpu::Queue, offset: wgpu::BufferAddress, data: &[u8]) {
+    pub fn write(&mut self, queue: &wgpu::Queue, offset: wgpu::BufferAddress, data: &[u8]) {
         queue.write_buffer(&self.buffer, offset, data);
     }
 
