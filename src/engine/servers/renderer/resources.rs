@@ -87,6 +87,10 @@ impl Buffer {
         }
     }
 
+    pub fn get_buffer_id(&self) -> &str {
+        self.id.as_str()
+    }
+
     pub fn write(&mut self, queue: &wgpu::Queue, offset: wgpu::BufferAddress, data: &[u8]) {
         queue.write_buffer(&self.buffer, offset, data);
     }
@@ -319,6 +323,7 @@ impl<'a> RenderPipelineBuilder<'a> {
             multiview: None,
         });
         RenderPipeline {
+            id: id.to_string(),
             pipeline: render_pipeline,
             group_layouts: group_layouts,
             bind_groups: HashMap::new(),
@@ -327,6 +332,7 @@ impl<'a> RenderPipelineBuilder<'a> {
 }
 
 pub struct RenderPipeline {
+    id: String,
     pipeline: wgpu::RenderPipeline,
     group_layouts: HashMap<u8, wgpu::BindGroupLayout>,
     bind_groups: HashMap<u8, wgpu::BindGroup>,
@@ -366,6 +372,9 @@ impl RenderPipeline {
                     entries: &entries,
                 }));
         }
+    }
+    pub fn get_id(&self) -> &str {
+        self.id.as_str()
     }
     pub fn get_native_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.pipeline

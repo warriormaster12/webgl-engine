@@ -80,7 +80,7 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         env_logger::init();
-        let mut eng = pollster::block_on(Engine::new("hello cube", (1280, 720)));
+        let eng = pollster::block_on(Engine::new("hello cube", (1280, 720)));
         let mut triangle_pipeline: RenderPipeline;
         let vertex_buffer: Buffer;
         let index_buffer: Buffer;
